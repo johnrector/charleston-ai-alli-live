@@ -65,8 +65,6 @@ async def demo_call(body: DemoCall, x_demo_key: str = Header(default="")):
         InitiateVoiceConversationOptions(
             to=body.to,
             websocket_url=f"wss://{domain}/ws",
-            welcome_greeting=f"Hi {body.name}, I'm Alli, John Rector's AI. John asked me to call you.",
-            action_url=f"https://{domain}/conversation-relay-callback",
         )
     )
     return {"ok": True, "call_sid": result.call_sid, "brief": body.brief}
