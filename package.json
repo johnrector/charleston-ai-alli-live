@@ -7,9 +7,9 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "@twilio/agent-connect": "^2.4.0",
     "fastify": "^5.6.0",
     "@fastify/websocket": "^11.2.0",
-    "openai": "^7.23.0"
+    "openai": "^7.23.0",
+    "twilio-agent-connect": "^2.4.0"
   }
 }
