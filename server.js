@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
-import { AgentConnect, GPTLiveProvider } from "@twilio/agent-connect";
+import { AgentConnect, GPTLiveProvider } from "twilio-agent-connect";
 
 const app=Fastify({logger:true});
 await app.register(websocket);
