@@ -6,6 +6,9 @@ from tac.channels.voice.media_streams.gpt_live import (
     GPTLiveProviderConfig,
 )
 from tac.server import TACFastAPIServer
+from tac.models.outbound import InitiateVoiceConversationOptions
+from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel
 from tac.tools import function_tool
 
 FOREGROUND = """You are Alli, John Rector's personal AI. You are not a receptionist, sales bot, call-center agent, or generic assistant.
@@ -41,6 +44,33 @@ SESSION_CONFIG = {
     },
 }
 
+app = FastAPI()
+
+class DemoCall(BaseModel):
+    to: str
+    name: str = "there"
+    brief: str = "John asked me to call and have a short conversation."
+
+@app.get("/health")
+async def health():
+    return {"ok": True, "voice_model": "gpt-live-1", "reasoning_model": "gpt-5.6-sol"}
+
+@app.post("/demo-call")
+async def demo_call(body: DemoCall, x_demo_key: str = Header(default="")):
+    expected = os.environ.get("DEMO_KEY", "")
+    if not expected or x_demo_key != expected:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    domain = os.environ["TWILIO_VOICE_PUBLIC_DOMAIN"]
+    result = await voice_channel.initiate_outbound_conversation(
+        InitiateVoiceConversationOptions(
+            to=body.to,
+            websocket_url=f"wss://{domain}/ws",
+            welcome_greeting=f"Hi {body.name}, I'm Alli, John Rector's AI. John asked me to call you.",
+            action_url=f"https://{domain}/conversation-relay-callback",
+        )
+    )
+    return {"ok": True, "call_sid": result.call_sid, "brief": body.brief}
+
 voice_channel = VoiceChannel(
     tac,
     config=GPTLiveProviderConfig(
@@ -54,5 +84,5 @@ voice_channel = VoiceChannel(
 )
 
 if __name__ == "__main__":
-    server = TACFastAPIServer(tac=tac, voice_channel=voice_channel, app=None)
+    server = TACFastAPIServer(tac=tac, voice_channel=voice_channel, app=app)
     server.start()
