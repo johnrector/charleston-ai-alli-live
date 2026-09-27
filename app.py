@@ -29,6 +29,7 @@ def demo_capability(action: str) -> str:
 tac = TAC(config=TACConfig.from_env())
 
 SESSION_CONFIG = {
+    "model": "gpt-live-1",
     "instructions": FOREGROUND,
     "audio": {
         "format": TWILIO_AUDIO_FORMAT_FOR_GPT_LIVE,
