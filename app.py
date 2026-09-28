@@ -108,8 +108,11 @@ voice_channel = VoiceChannel(
         tools=[check_calendar, create_meeting, send_email],
         default_session_config=SESSION_CONFIG,
         welcome_instruction=(
-            "Follow the OPENING and CURRENT CALL CONTEXT already in your session instructions. "
-            "State the reason for the call immediately and naturally, then stop and listen."
+            "Speak immediately when the media stream opens. Do not wait for the caller to speak first. "
+            "This is an outbound call, so silence is a failure. Follow the OPENING and CURRENT CALL CONTEXT "
+            "already in your session instructions now: address the recipient by name, identify yourself as "
+            "Alli, John Rector's AI, state the specific reason John asked you to call in one or two short "
+            "sentences, then stop and listen."
         ),
     ),
 )
