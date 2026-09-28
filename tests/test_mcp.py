@@ -62,6 +62,7 @@ def grant(client, auth, registered):
     assert r.status_code==302,r.text
     location=r.headers['location']
     page=client.get(location)
+    assert 'https://chatgpt.com/connector/oauth/' in page.headers['content-security-policy']
     csrf=re.search('name="csrf" value="([^"]+)"',page.text)[1]
     nonce=parse_qs(urlparse(location).query)['request'][0]
     form={'request':nonce,'csrf':csrf,'owner_key':'test-admin'}

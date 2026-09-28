@@ -30,7 +30,7 @@ RESOURCE = BASE + '/mcp'
 ISSUER = BASE + '/'
 router = APIRouter()
 SAFE_HEADERS = {'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
-                'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+                'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://chatgpt.com/connector/oauth/ https://chatgpt.com/connector_platform_oauth_redirect; frame-ancestors 'none'",
                 'X-Content-Type-Options': 'nosniff'}
 
 
