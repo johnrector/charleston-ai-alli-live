@@ -29,7 +29,8 @@ BASE = 'https://' + os.environ.get('TWILIO_VOICE_PUBLIC_DOMAIN', 'charleston-ai-
 RESOURCE = BASE + '/mcp'
 ISSUER = BASE + '/'
 router = APIRouter()
-SAFE_HEADERS = {'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+# Preserve the Origin on same-origin form POSTs; send no referrer to callbacks.
+SAFE_HEADERS = {'Cache-Control': 'no-store', 'Referrer-Policy': 'same-origin',
                 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://chatgpt.com/connector/oauth/ https://chatgpt.com/connector_platform_oauth_redirect; frame-ancestors 'none'",
                 'X-Content-Type-Options': 'nosniff'}
 
