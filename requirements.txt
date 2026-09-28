@@ -1,6 +1,10 @@
-twilio-agent-connect[server,gpt-live]>=2.4.0
+twilio-agent-connect[server,gpt-live]==2.5.0
 openai>=2.0.0
 
 google-api-python-client>=2.180.0
 google-auth-oauthlib>=1.2.2
 google-auth-httplib2>=0.2.0
+
+cryptography>=45,<51
+psycopg[binary]>=3.2,<4
+httpx>=0.28,<1
