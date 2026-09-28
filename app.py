@@ -46,6 +46,7 @@ SESSION_CONFIG = {
 }
 
 app = FastAPI()
+MISSION_BY_CALL = {}
 
 class DemoCall(BaseModel):
     to: str
@@ -68,7 +69,16 @@ async def demo_call(body: DemoCall, x_demo_key: str = Header(default="")):
             websocket_url=f"wss://{domain}/ws",
         )
     )
-    return {"ok": True, "call_sid": result.call_sid, "brief": body.brief}
+    MISSION_BY_CALL[result.call_sid] = {
+        "name": body.name,
+        "brief": body.brief,
+    }
+    return {
+        "ok": True,
+        "call_sid": result.call_sid,
+        "brief": body.brief,
+        "mission_registered": True,
+    }
 
 voice_channel = VoiceChannel(
     tac,
@@ -76,8 +86,8 @@ voice_channel = VoiceChannel(
         tools=[demo_capability],
         default_session_config=SESSION_CONFIG,
         welcome_instruction=(
-            "Greet the person immediately and naturally: Hi, I'm Alli, John Rector's AI. "
-            "John asked me to call you. Then pause and listen."
+            "You initiated this outbound call on John's behalf. Do not ask the recipient how you can help with John. "
+            "State the reason for the call immediately and naturally, then stop and listen."
         ),
     ),
 )
