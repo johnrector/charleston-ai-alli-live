@@ -1,6 +1,8 @@
 import os
 import hmac
 import json
+import logging
+import time
 from copy import deepcopy
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -92,6 +94,12 @@ async def demo_call(body: DemoCall, x_demo_key: str = Header(default="")):
     expected = os.environ.get("DEMO_KEY", "")
     if not expected or not hmac.compare_digest(x_demo_key, expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
+    return await initiate_demo_call(body)
+
+
+async def initiate_demo_call(body: DemoCall):
+    """Shared /demo-call and MCP path; register mission before Twilio can connect."""
+    started = time.perf_counter()
     domain = os.environ["TWILIO_VOICE_PUBLIC_DOMAIN"]
     result = await voice_channel.initiate_outbound_conversation(
         InitiateVoiceConversationOptionsGPTLive(
@@ -100,6 +108,9 @@ async def demo_call(body: DemoCall, x_demo_key: str = Header(default="")):
             session_config=call_session(body),
         )
     )
+    logging.getLogger("alli.call").info(
+        "outbound_call_accepted call_sid=%s twilio_accept_ms=%.1f mission_registered=true",
+        result.call_sid, (time.perf_counter()-started)*1000)
     return {"ok": True, "call_sid": result.call_sid, "mission_registered": True}
 
 voice_channel = VoiceChannel(
@@ -116,6 +127,9 @@ voice_channel = VoiceChannel(
         ),
     ),
 )
+
+from mcp_integration import install_mcp
+mcp = install_mcp(app, initiate_demo_call, DemoCall)
 
 if __name__ == "__main__":
     server = TACFastAPIServer(tac=tac, voice_channel=voice_channel, app=app)

@@ -8,3 +8,6 @@ google-auth-httplib2>=0.2.0
 cryptography>=45,<51
 psycopg[binary]>=3.2,<4
 httpx>=0.28,<1
+
+mcp==1.30.0
+phonenumbers==9.0.40
