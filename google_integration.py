@@ -265,3 +265,41 @@ def status(x_demo_key: str=Header(default='')):
         return {'ok':calendar['ok'] and gmail_ok,'durable_token':True,'refresh_verified':True,'calendar_read_verified':calendar['ok'],'gmail_send_scope_verified':gmail_ok,'email_sent_during_check':False,'timezone':str(TZ)}
     except Exception:
         raise HTTPException(503,'Google connection not ready; check configuration and reconnect') from None
+
+
+@router.post('/google/self-test')
+def calendar_self_test(x_demo_key: str=Header(default='')):
+    """Admin-only, transparent test event with no attendees; always attempt cleanup."""
+    require_admin(x_demo_key)
+    event_id = 'allitest' + secrets.token_hex(16)
+    path = 'calendar/v3/calendars/primary/events/' + event_id
+    start = (datetime.now(TZ) + timedelta(days=7)).replace(hour=3,minute=0,second=0,microsecond=0)
+    attempted = False
+    try:
+        attempted = True
+        created = api('POST','calendar/v3/calendars/primary/events',body={
+            'id':event_id,'summary':'Alli integration check — automatic cleanup',
+            'description':'Private integration test. No attendees and no invitations.',
+            'transparency':'transparent','reminders':{'useDefault':False},
+            'start':{'dateTime':start.isoformat(),'timeZone':str(TZ)},
+            'end':{'dateTime':(start+timedelta(minutes=5)).isoformat(),'timeZone':str(TZ)}},params={'sendUpdates':'none'})
+        verified = api('GET',path)
+        if created.get('id') != event_id or verified.get('id') != event_id:
+            raise GoogleError('Test creation not verified')
+    except Exception:
+        raise HTTPException(503,'Calendar self-test failed; cleanup was attempted') from None
+    finally:
+        if attempted:
+            try:
+                api('DELETE',path,params={'sendUpdates':'none'})
+            except GoogleError as e:
+                if 'HTTP 404' not in str(e) and 'HTTP 410' not in str(e):
+                    raise HTTPException(503, 'Test cleanup needs attention; event ID: '+event_id) from None
+    try:
+        deleted = api('GET',path)
+        cleanup_ok = deleted.get('status') == 'cancelled'
+    except GoogleError as e:
+        cleanup_ok = 'HTTP 404' in str(e) or 'HTTP 410' in str(e)
+    if not cleanup_ok:
+        raise HTTPException(503,'Test event cleanup could not be verified; event ID: '+event_id)
+    return {'ok':True,'create_verified':True,'read_verified':True,'cleanup_verified':True,'attendees':0,'emails_sent':0,'event_id':event_id}
