@@ -223,3 +223,29 @@ def test_voicemail_twiml_replaces_stream_and_hangs_up(service):
     assert '&lt;friend&gt; &amp;' in saved[0][1]['twiml']
     assert '<Hangup' in saved[0][1]['twiml']
     assert '<Connect' not in saved[0][1]['twiml']
+
+
+def test_exact_expiring_intent_can_book_without_broad_enable(service,monkeypatch):
+    import json
+    from datetime import datetime,timedelta,timezone
+    voice,adapter,store,body=service
+    monkeypatch.setenv('OUTBOUND_CALLS_ENABLED','false')
+    monkeypatch.setenv('OUTBOUND_TEST_PHONE','+12025550999')
+    body=body.model_copy(update={'email':'pat@example.com'})
+    approved=body.model_dump(mode='json') | {'request_id':'one-meeting-intent','preset':'scheduling',
+        'capabilities':['check_calendar','create_meeting']}
+    monkeypatch.setenv('OUTBOUND_SINGLE_CALL_JSON',json.dumps({'expires_at':(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat(),'call':approved}))
+    captured=[]
+    async def dial(channel,options):
+        captured.append(options)
+        assert set(channel._provider._tools_by_name)=={'check_calendar','create_meeting','report_call_outcome','end_call'}
+        return SimpleNamespace(call_sid='CA-once')
+    monkeypatch.setattr(voice.VoiceChannel,'initiate_outbound_conversation',dial)
+    async def run():
+        with pytest.raises(HTTPException):
+            await adapter.initiate(body.model_copy(update={'mission':'Unauthorized change'}))
+        one=await adapter.initiate(body)
+        two=await adapter.initiate(body.model_copy(update={'request_id':'different-client-id'}))
+        assert one['request_id']==two['request_id']=='one-meeting-intent'
+    asyncio.run(run())
+    assert len(captured)==1

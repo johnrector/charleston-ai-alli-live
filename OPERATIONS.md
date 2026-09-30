@@ -116,3 +116,14 @@ The existing free Render database expires October 28, 2026. Upgrade/migrate requ
 owner approval and is not part of this change. The legacy Node sibling currently
 fails on a pre-existing `AgentConnect` export error; the Python service is the
 active deployment. No unverified inbound callback number is advertised in voicemail.
+
+## One explicitly authorized call while general dialing is off
+
+An administrator can set `OUTBOUND_SINGLE_CALL_JSON` to an object with an aware
+`expires_at` timestamp and one fully validated `call` body. Its phone, recipient
+name, email and mission must exactly match the incoming request. The service
+uses only that server-owned body, fixed request ID and explicit capabilities;
+caller-provided context cannot expand the authorization. Durable deduplication
+still permits at most one dial. Expired or mismatched grants do not authorize
+calls. Owner-test behavior and automatic calling remain unchanged. Remove the
+grant after the requested call and result readback are complete.

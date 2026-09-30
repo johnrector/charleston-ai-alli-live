@@ -73,7 +73,12 @@ class OutboundVoice:
     async def initiate(self, body, before_dial=None):
         enabled = os.getenv('OUTBOUND_CALLS_ENABLED', '').lower() == 'true'
         test_phone = os.getenv('OUTBOUND_TEST_PHONE', '')
-        if not enabled:
+        from single_call_grant import match_single_call
+        approved = match_single_call(body.model_dump(mode='json'), os.getenv('OUTBOUND_SINGLE_CALL_JSON', ''))
+        if approved is not None:
+            from outbound_profiles import OutboundCall
+            body = OutboundCall.model_validate(approved)
+        if not enabled and approved is None:
             if not test_phone or body.phone != test_phone:
                 raise HTTPException(503, 'General outbound calls are disabled; only the configured owner test recipient is permitted')
             if body.capabilities:
@@ -221,6 +226,7 @@ class OutboundVoice:
             return {
                 'manual_calls_enabled': os.getenv('OUTBOUND_CALLS_ENABLED', '').lower() == 'true',
                 'owner_only_test_configured': bool(os.getenv('OUTBOUND_TEST_PHONE')),
+                'single_call_grant_configured': bool(os.getenv('OUTBOUND_SINGLE_CALL_JSON')),
                 'persistence_configured': bool(os.getenv('DATABASE_URL')),
                 'voice_domain_configured': bool(os.getenv('TWILIO_VOICE_PUBLIC_DOMAIN')),
                 'automatic_calls_enabled': False,
