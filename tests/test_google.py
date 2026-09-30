@@ -65,7 +65,7 @@ def test_meeting_invites_and_returns_google_confirmation(monkeypatch):
         calls.append((method,path,kw))
         if method=='GET': raise g.GoogleError('HTTP 404')
         if path.endswith('freeBusy'): return {'calendars':{'primary':{'busy':[]}}}
-        event=kw['body']; return {**event,'htmlLink':'https://calendar.google.com/event/test'}
+        event=kw['body']; return {**event,'status':'confirmed','htmlLink':'https://calendar.google.com/event/test'}
     monkeypatch.setattr(g,'api',api)
     r=g.meeting('Susan','susan@example.com','2030-01-07T15:30:00',30,'Meeting',confirmed=True)
     assert r['ok'] and r['event_id']
@@ -102,3 +102,70 @@ def test_gmail_success_requires_message_id(monkeypatch):
 def test_tool_errors_never_report_success(monkeypatch):
     def fail(*a): raise RuntimeError('secret detail')
     assert asyncio.run(g.safely(fail))=={'ok':False,'error':'Google action could not be verified. Do not claim success or blindly retry a send.'}
+
+
+def recovered_event(path):
+    return {'id': path.rsplit('/', 1)[-1], 'status': 'confirmed',
+            'start': {'dateTime': '2030-01-07T15:30:00-05:00'},
+            'end': {'dateTime': '2030-01-07T16:00:00-05:00'},
+            'attendees': [{'email': 'susan@example.com'}]}
+
+
+@pytest.mark.parametrize('cached', [False, True])
+def test_meeting_recovery_reads_current_event_without_insert(monkeypatch, cached):
+    fake_db(monkeypatch, ({'ok': True, 'event_id': 'stale'},) if cached else None)
+    api = Mock(side_effect=lambda method, path, **kw: recovered_event(path))
+    monkeypatch.setattr(g, 'api', api)
+    result = g.meeting('Susan', 'susan@example.com', '2030-01-07T15:30:00', 30, 'Meeting', confirmed=True)
+    assert result['ok'] and result['event_id'] != 'stale'
+    assert api.call_count == 1 and api.call_args.args[0] == 'GET'
+
+
+@pytest.mark.parametrize('change', ['cancelled', 'tentative', 'start', 'end', 'attendee', 'declined', 'missing_status'])
+@pytest.mark.parametrize('cached', [False, True])
+def test_changed_event_fails_closed(monkeypatch, change, cached):
+    fake_db(monkeypatch, ({'ok': True},) if cached else None)
+    def api(method, path, **kw):
+        assert method == 'GET'
+        event = recovered_event(path)
+        if change in ('cancelled', 'tentative'): event['status'] = change
+        elif change in ('start', 'end'): event[change]['dateTime'] = '2030-01-07T17:00:00-05:00'
+        elif change == 'attendee': event['attendees'][0]['email'] = 'other@example.com'
+        elif change == 'declined': event['attendees'][0]['responseStatus'] = 'declined'
+        else: event.pop('status')
+        return event
+    monkeypatch.setattr(g, 'api', api)
+    with pytest.raises(g.GoogleError):
+        g.meeting('Susan', 'susan@example.com', '2030-01-07T15:30:00', 30, 'Meeting', confirmed=True)
+
+
+def test_deleted_cached_event_is_not_recreated(monkeypatch):
+    fake_db(monkeypatch, ({'ok': True},))
+    api = Mock(side_effect=g.GoogleError('HTTP 404'))
+    monkeypatch.setattr(g, 'api', api)
+    with pytest.raises(g.GoogleError, match='do not recreate'):
+        g.meeting('Susan', 'susan@example.com', '2030-01-07T15:30:00', 30, 'Meeting', confirmed=True)
+    assert api.call_count == 1
+
+
+@pytest.mark.parametrize('start,end', [('2030-11-03T01:30:00-04:00', '2030-11-03T01:30:00-05:00'),
+                                    ('2030-03-10T01:30:00-05:00', '2030-03-10T03:30:00-04:00')])
+def test_meeting_duration_is_elapsed_time_across_dst(monkeypatch, start, end):
+    fake_db(monkeypatch)
+    def api(method, path, **kw):
+        if method == 'GET': raise g.GoogleError('HTTP 404')
+        if path.endswith('freeBusy'): return {'calendars': {'primary': {'busy': []}}}
+        assert kw['body']['end']['dateTime'] == end
+        return {**kw['body'], 'status': 'confirmed'}
+    monkeypatch.setattr(g, 'api', api)
+    assert g.meeting('Susan', 'susan@example.com', start, 60, 'Meeting', confirmed=True)['ok']
+
+
+@pytest.mark.parametrize('name,email', [('', 'susan@example.com'), ('  ', 'susan@example.com'),
+    ('x'*201, 'susan@example.com'), ('Susan\nOther', 'susan@example.com'),
+    ('Susan', 'x'*310+'@example.com'), ('Susan', 'not-an-email')])
+def test_bad_attendee_rejected_before_network(monkeypatch, name, email):
+    api = Mock(); monkeypatch.setattr(g, 'api', api)
+    with pytest.raises(ValueError):
+        g.meeting(name, email, '2030-01-07T15:30:00', 30, 'Meeting', confirmed=True)
+    api.assert_not_called()

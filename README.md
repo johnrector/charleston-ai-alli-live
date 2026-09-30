@@ -1,6 +1,6 @@
 # Charleston AI — Alli Live
 
-Persistent Twilio Agent Connect service for the Tuesday real-estate demonstration.
+Persistent Twilio Agent Connect service for mission-driven outbound calls and the original real-estate demonstration.
 
 Architecture:
 
@@ -57,14 +57,12 @@ Run local tests with `python -m pytest -q` (install pytest separately).
 
 ## ChatGPT native calling (MCP)
 
-The same Python service now exposes **one** OAuth-authenticated tool,
-`call_contact`, at `https://charleston-ai-alli-gpt-live.onrender.com/mcp`.
-It normalizes phone numbers locally and invokes the same `initiate_demo_call`
-function used by `/demo-call`. The established per-call session context and
-immediate greeting remain unchanged. There is no Supabase/HTTP relay, backend
-LLM request, Google request, or database lookup between an authenticated tool
-invocation and the Twilio dial. Structured output is `{ok, call_sid, status}`;
-`queued` means Twilio accepted the call, not that someone answered.
+The same Python service exposes OAuth-authenticated calling and result tools at `https://charleston-ai-alli-gpt-live.onrender.com/mcp`.
+`call_contact` accepts the original contact/mission fields but now uses the
+generic isolated call path. `call_outbound` adds explicit capabilities, optional
+presets and request IDs; `get_call_result` reads durable outcomes. The new path
+commits a database deduplication claim before dialing. `queued` means Twilio
+accepted the call, not that someone answered. See the general-purpose section below.
 
 Connect in ChatGPT → Plugins → Add → Create MCP App. Use the MCP URL above,
 OAuth, and the private connection name **Charleston AI — Alli Calls**. Discovery
@@ -93,11 +91,100 @@ photo-to-ring latency. Measure that separately from server-to-Twilio acceptance.
 
 Render logs record `outbound_call_accepted` and `mcp_call_accepted` with Call SID
 and elapsed milliseconds, without contact text, mission text, keys, or tokens.
-The MCP tool is not idempotent: never automatically retry an uncertain response.
-The original authenticated `/demo-call` endpoint remains available.
+General calling claims are idempotent; never create a new request ID merely to
+retry an uncertain response. The original authenticated `/demo-call` endpoint
+remains non-idempotent and must never be retried automatically.
 
 Official references checked September 28, 2026:
 - https://developers.openai.com/apps-sdk/deploy/connect-chatgpt
 - https://developers.openai.com/apps-sdk/build/auth
 - https://developers.openai.com/apps-sdk/build/mcp-server
 - https://github.com/modelcontextprotocol/python-sdk/tree/v1.x
+
+## General-purpose outbound calls (disabled by default)
+
+The reusable path is `call_outbound` (MCP) or administrator-authenticated
+`POST /outbound-call`. The existing `call_contact` now forwards to the same generic, no-calendar
+mission path so already-connected plugins do not inherit the demo.
+`/demo-call` alone remains the explicit legacy real-estate demo. New calls **do not inherit the demo instructions,
+property addresses, business-card text, or its executable tools**.
+
+A call is a **mission + bounded context + explicit capability envelope**.
+`purpose` is an optional descriptive label; presets provide optional starting
+points for confirmations, scheduling and follow-ups. They never grant actions.
+The conversation can evolve naturally without redeployment. For example, an
+appointment follow-up may turn into scheduling if `check_calendar` and
+`create_meeting` were explicitly authorized for this call. With no calendar
+capabilities, the same request is captured for John instead. Sending email,
+editing/cancelling events, making other calls and enrolling anyone in future
+calls are not available in this path.
+
+Use a stable `request_id` for one intended call, including every retry/readback.
+The compatibility `call_contact` derives its ID from normalized original inputs;
+repeating those exact inputs returns the existing call/report without dialing.
+To intentionally call again later, use `call_outbound` with a newly authorized
+request ID. Compatibility calls never gain calendar powers from their mission
+text; refresh the plugin tools and use explicit capabilities for scheduling.
+Reusing it with different details is rejected. A durable PostgreSQL claim commits
+before Twilio is invoked; existing claims never dial again, including a crash,
+network timeout, or uncertain response. Deliberately making another call needs a
+new authorized intent and request ID, not an automatic retry with a new UUID.
+`get_call_result(request_id)` / `GET /outbound-calls/{request_id}` returns dispatch
+status, provider disposition, and a structured conversation report if one was
+saved. `queued` only means acceptance. `completed` only means the phone call
+ended; neither means the person attended or that an appointment was booked.
+A missing outcome remains missing, never synthesized into success.
+
+Each call has its own TAC channel, executable tool registry and server-bound
+outcome closure. The model cannot choose another call's outcome ID. Booking
+capability exposes a recipient-bound wrapper, with verified identity and explicit
+agreement to exact time/duration/timezone required before the existing Google
+booking path runs. The existing Google free/busy recheck and deterministic event
+ID remain in force. Recipient email must already be supplied and validated;
+unknown email blocks booking instead of allowing arbitrary recipient injection.
+Calendar invitations are sent by Google creation; no separate email is sent.
+
+All new webhook and WebSocket routes validate Twilio signatures. Uncorrelated
+connections cannot fall back to the demo profile. Answering-machine detection
+requests hang-up on machine/fax/unknown; the assistant first asks identity and
+must not disclose call details before identity is confirmed. AMD can classify
+late or incorrectly, so actual behavior still needs an approved real-call test.
+Calls time out at 15 minutes; unanswered ringing times out at 25 seconds.
+This process retains transport state in memory, so **keep one service process
+and one instance**, as with the original TAC demo. Restart loses active/pending
+transport context but does not make the durable call claim retryable.
+
+### Activation checklist
+
+Nothing in this change enables calls, starts a schedule, deploys, or changes
+Google grants. `OUTBOUND_CALLS_ENABLED` defaults to false. For an explicitly approved owner-only
+test, keep it false and set `OUTBOUND_TEST_PHONE` to that one verified E.164
+number. This mode rejects every other recipient and all calendar capabilities;
+it does not activate a scheduler. Remove the test setting after validation. `GET /outbound-readiness`
+requires `X-Demo-Key` and describes configuration and automatic-call blockers;
+it is not a live connectivity test. Use existing credentials, private Postgres,
+and the existing OAuth connection; no new credential grant is implemented.
+
+Before enabling manual calls: deploy reviewed code only with owner's approval,
+verify schema creation/atomic claims against real Postgres, check the existing
+Google token/database lifetime, verify public signed routes on the actual domain,
+and conduct an explicitly approved call to a verified test recipient. Exercise
+answer, wrong person, voicemail, no answer, questions, agreed booking, and readback.
+Verify call timing, sound/latency, identity-first privacy, per-call tools, callback
+ordering and prompt behavior. Local tests substitute all external side effects;
+they do not establish production readiness.
+
+Before automatic confirmations or weekly follow-ups: settle eligible-event rules,
+verified contact/phone source and consent, recipient timezone/quiet hours,
+voicemail policy and retention; connect a read-only calendar instance iterator and
+fresh event/contact revalidator. `appointment_confirmation.py` provides a dormant
+approximately-one-hour dispatch-window checker and callback-based dispatcher,
+with cancellation/reschedule/contact-change revalidation before dialing. It is
+not a running watcher. Weekly selection must identify the recipient's latest
+relevant appointment and avoid later/cancelled/replaced events; that selector and
+scheduler are deliberately not installed. Select an approved schedule only after
+those adapters/policies and live integration are verified. Never point a timer at `/demo-call` or bypass policy gates with manual-call tools.
+
+Local checks: `python -m pytest -q` and `python -m compileall -q .`.
+New ledger tests verify SQL transaction contracts with mocks; a real PostgreSQL
+concurrency/commit test remains part of pre-production validation.

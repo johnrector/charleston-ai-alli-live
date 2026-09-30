@@ -87,7 +87,10 @@ def call_session(body: DemoCall):
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "voice_model": "gpt-live-1", "reasoning_model": "gpt-5.6-sol"}
+    return {"ok": True, "voice_model": "gpt-live-1", "reasoning_model": "gpt-5.6-sol",
+            "build_commit": os.getenv("RENDER_GIT_COMMIT", "local"),
+            "outbound_api": "mission-capabilities-v1",
+            "automatic_calls_enabled": False}
 
 @app.post("/demo-call")
 async def demo_call(body: DemoCall, x_demo_key: str = Header(default="")):
@@ -129,7 +132,14 @@ voice_channel = VoiceChannel(
 )
 
 from mcp_integration import install_mcp
-mcp = install_mcp(app, initiate_demo_call, DemoCall)
+from outbound_profiles import OutboundCall
+from appointment_voice import OutboundVoice
+outbound_voice = OutboundVoice(tac, SESSION_CONFIG)
+outbound_voice.install(app, OutboundCall)
+mcp = install_mcp(app, initiate_demo_call, DemoCall,
+                  initiate_outbound=outbound_voice.initiate,
+                  outbound_model=OutboundCall,
+                  read_outcome=outbound_voice.read_result)
 
 if __name__ == "__main__":
     server = TACFastAPIServer(tac=tac, voice_channel=voice_channel, app=app)

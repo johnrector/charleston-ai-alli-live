@@ -151,7 +151,8 @@ def email_address(value):
 
 def availability(start_datetime, end_datetime, duration_minutes=30):
     start, end = local_time(start_datetime), local_time(end_datetime)
-    if end <= start or end-start > timedelta(days=31) or not 5 <= duration_minutes <= 480:
+    elapsed = end.astimezone(timezone.utc) - start.astimezone(timezone.utc)
+    if elapsed <= timedelta(0) or elapsed > timedelta(days=31) or not 5 <= duration_minutes <= 480:
         raise ValueError('Use an ordered window up to 31 days and a duration of 5–480 minutes')
     data = api('POST','calendar/v3/freeBusy',body={'timeMin':start.isoformat(),'timeMax':end.isoformat(),'timeZone':str(TZ),'items':[{'id':'primary'}]})
     calendar = data.get('calendars',{}).get('primary',{})
@@ -173,26 +174,44 @@ def availability(start_datetime, end_datetime, duration_minutes=30):
 
 def meeting(attendee_name, attendee_email, start_datetime, duration_minutes, title, context='', confirmed=False):
     if not confirmed: raise ValueError('Obtain agreement on the meeting time before creating it')
+    if not isinstance(attendee_name, str) or not attendee_name.strip() or len(attendee_name) > 200 or any(ord(c) < 32 for c in attendee_name):
+        raise ValueError('A nonempty attendee name of at most 200 characters is required')
+    if not isinstance(attendee_email, str) or len(attendee_email) > 320:
+        raise ValueError('A valid attendee email of at most 320 characters is required')
     email_address(attendee_email)
     start = local_time(start_datetime)
     if start <= datetime.now(TZ) or not 5 <= duration_minutes <= 480 or not title.strip():
         raise ValueError('Meeting must have a title, a future time and a duration of 5–480 minutes')
-    end=start+timedelta(minutes=duration_minutes)
+    end=(start.astimezone(timezone.utc)+timedelta(minutes=duration_minutes)).astimezone(TZ)
     event_id=hashlib.sha256(json.dumps([attendee_email.lower(),start.isoformat(),duration_minutes,title],ensure_ascii=True).encode()).hexdigest()
     event_path='calendar/v3/calendars/primary/events/'+event_id
     with store.action_lock() as db:
         existing=db.execute('SELECT result FROM alli_google_action WHERE id=%s AND status=%s',(event_id,'done')).fetchone()
-        if existing: return existing[0]
+        # Cached success is historical; always re-read the current event.
         # Deterministic Google event ID makes retries safe after a lost HTTP response.
         try:
             event=api('GET',event_path)
         except GoogleError as e:
             if 'HTTP 404' not in str(e): raise
+            if existing:
+                raise GoogleError('Previously booked event is missing; do not recreate it automatically') from None
             current=availability(start.isoformat(),end.isoformat(),duration_minutes)
             if current['busy']: raise ValueError('John is busy during that time. Choose another slot.')
             payload={'id':event_id,'summary':title,'description':context,'start':{'dateTime':start.isoformat(),'timeZone':str(TZ)},'end':{'dateTime':end.isoformat(),'timeZone':str(TZ)},'attendees':[{'email':attendee_email,'displayName':attendee_name}]}
             event=api('POST','calendar/v3/calendars/primary/events',body=payload,params={'sendUpdates':'all'})
-        if not event.get('id') or event.get('status')=='cancelled': raise GoogleError('Calendar creation not confirmed')
+        try:
+            attendees = event.get('attendees', [])
+            matches = (
+                event.get('id') == event_id and event.get('status') == 'confirmed'
+                and local_time(event['start']['dateTime']).astimezone(timezone.utc) == start.astimezone(timezone.utc)
+                and local_time(event['end']['dateTime']).astimezone(timezone.utc) == end.astimezone(timezone.utc)
+                and {a.get('email', '').lower() for a in attendees} == {attendee_email.lower()}
+                and all(a.get('responseStatus') != 'declined' for a in attendees)
+            )
+        except (KeyError, TypeError, ValueError, AttributeError):
+            matches = False
+        if not matches:
+            raise GoogleError('Calendar event is missing, changed, cancelled or declined; booking is not confirmed')
         result={'ok':True,'event_id':event['id'],'event_link':event.get('htmlLink'),'start':event['start'],'end':event['end'],'timezone':str(TZ),'invitation_requested':True,'attendee_email':attendee_email}
         db.execute("INSERT INTO alli_google_action(id,status,result) VALUES(%s,'done',%s) ON CONFLICT(id) DO UPDATE SET status='done',result=EXCLUDED.result",(event_id,Jsonb(result)))
         return result
