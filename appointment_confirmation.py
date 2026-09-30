@@ -49,7 +49,7 @@ class ConfirmationPolicy(StrictModel):
     verified_phone_source: str = Field(default='', max_length=500)
     quiet_start_hour: int | None = Field(default=None, ge=0, le=23)
     quiet_end_hour: int | None = Field(default=None, ge=0, le=23)
-    voicemail: Literal['unset', 'hang_up'] = 'unset'
+    voicemail: Literal['unset', 'hang_up', 'generic_message'] = 'unset'
     lead_minutes: int = Field(default=60, ge=15, le=1440)
     dispatch_window_minutes: int = Field(default=10, ge=1, le=15)
 

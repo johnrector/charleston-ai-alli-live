@@ -90,7 +90,7 @@ async def health():
     return {"ok": True, "voice_model": "gpt-live-1", "reasoning_model": "gpt-5.6-sol",
             "build_commit": os.getenv("RENDER_GIT_COMMIT", "local"),
             "outbound_api": "mission-capabilities-v1",
-            "automatic_calls_enabled": False}
+            "automatic_calls_enabled": os.getenv("APPOINTMENT_AUTOMATION_ENABLED", "").lower() == "true"}
 
 @app.post("/demo-call")
 async def demo_call(body: DemoCall, x_demo_key: str = Header(default="")):
@@ -136,6 +136,9 @@ from outbound_profiles import OutboundCall
 from appointment_voice import OutboundVoice
 outbound_voice = OutboundVoice(tac, SESSION_CONFIG, read_provider=True)
 outbound_voice.install(app, OutboundCall)
+from appointment_automation import AppointmentAutomation
+appointment_automation = AppointmentAutomation(outbound_voice)
+appointment_automation.install(app)
 mcp = install_mcp(app, initiate_demo_call, DemoCall,
                   initiate_outbound=outbound_voice.initiate,
                   outbound_model=OutboundCall,

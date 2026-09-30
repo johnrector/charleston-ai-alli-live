@@ -145,10 +145,14 @@ unknown email blocks booking instead of allowing arbitrary recipient injection.
 Calendar invitations are sent by Google creation; no separate email is sent.
 
 All new webhook and WebSocket routes validate Twilio signatures. Uncorrelated
-connections cannot fall back to the demo profile. Answering-machine detection
-requests hang-up on machine/fax/unknown; the assistant first asks identity and
-must not disclose call details before identity is confirmed. AMD can classify
-late or incorrectly, so actual behavior still needs an approved real-call test.
+connections cannot fall back to the demo profile. Answering-machine detection uses DetectMessageEnd for the default generic
+voicemail policy. Only a beep/end-of-greeting signal can submit the fixed,
+privacy-safe message; a durable pending claim prevents replay after duplicates
+or an uncertain response. The message names Alli, John and Charleston AI but
+omits recipient/appointment details and any unverified callback promise.
+The optional hang_up policy leaves no message. Fax/unknown detection fails
+closed. The assistant first verifies identity before discussing call details.
+AMD can classify late or incorrectly; real-call validation is still required.
 Calls time out at 15 minutes; unanswered ringing times out at 25 seconds.
 This process retains transport state in memory, so **keep one service process
 and one instance**, as with the original TAC demo. Restart loses active/pending
@@ -174,16 +178,27 @@ Verify call timing, sound/latency, identity-first privacy, per-call tools, callb
 ordering and prompt behavior. Local tests substitute all external side effects;
 they do not establish production readiness.
 
-Before automatic confirmations or weekly follow-ups: settle eligible-event rules,
-verified contact/phone source and consent, recipient timezone/quiet hours,
-voicemail policy and retention; connect a read-only calendar instance iterator and
-fresh event/contact revalidator. `appointment_confirmation.py` provides a dormant
-approximately-one-hour dispatch-window checker and callback-based dispatcher,
-with cancellation/reschedule/contact-change revalidation before dialing. It is
-not a running watcher. Weekly selection must identify the recipient's latest
-relevant appointment and avoid later/cancelled/replaced events; that selector and
-scheduler are deliberately not installed. Select an approved schedule only after
-those adapters/policies and live integration are verified. Never point a timer at `/demo-call` or bypass policy gates with manual-call tools.
+Automatic confirmations and weekly follow-ups are implemented but disabled.
+`appointment_calendar.py` reads all pages of the owned primary calendar's
+expanded instances, checks explicit private opt-ins and trusted contact bindings,
+and selects hour-before or week-after windows. A follow-up is suppressed by a
+newer same-contact event, including a future or untagged event associated by the
+verified recipient email. The bounded horizon is 30 days back and 90 days forward;
+unknown association and events outside that horizon cannot be ruled out.
+`appointment_automation.py` exposes authenticated preview/run-once endpoints and
+an optional 60-second polling loop. No task starts unless
+`APPOINTMENT_AUTOMATION_ENABLED=true`; actual dispatch additionally requires broad
+outbound enablement, approved policy/contact configuration, and per-event/per-mode
+opt-in. Owner-only test mode can never drive the automatic dispatcher.
+
+Every dispatch re-reads the complete calendar horizon, exact event instance and
+trusted contact directory after its durable claim and before dialing. Cancellation,
+rescheduling, changed contact bindings, quiet hours, unknown reads, incomplete
+pagination, and stale timing block the attempt without redial. Recurring events
+use instance IDs. No phone is inferred from event titles, descriptions or email.
+See [OPERATIONS.md](OPERATIONS.md) for API examples, configuration and the remaining
+owner decisions. No real policy, contacts or client schedule was configured.
+Never point a timer at `/demo-call` or bypass these gates with manual-call tools.
 
 Local checks: `python -m pytest -q` and `python -m compileall -q .`.
 New ledger tests verify SQL transaction contracts with mocks; a real PostgreSQL

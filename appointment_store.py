@@ -7,7 +7,7 @@ No database connections are opened at import time.
 """
 
 from threading import Lock
-from typing import Any
+from typing import Any, Literal
 
 from psycopg.types.json import Jsonb
 
@@ -49,6 +49,7 @@ def initialize() -> None:
                     call_sid text,
                     context jsonb NOT NULL,
                     outcome jsonb,
+                    voicemail jsonb,
                     reason text,
                     disposition text CHECK (
                         disposition IN ('queued', 'ringing', 'in-progress',
@@ -62,6 +63,10 @@ def initialize() -> None:
             db.execute('''
                 ALTER TABLE alli_appointment_dispatch
                 ADD COLUMN IF NOT EXISTS disposition text
+            ''')
+            db.execute('''
+                ALTER TABLE alli_appointment_dispatch
+                ADD COLUMN IF NOT EXISTS voicemail jsonb
             ''')
         # A failed commit must leave initialization retryable.
         _initialized = True
@@ -90,13 +95,13 @@ def get(key: str) -> dict[str, Any] | None:
     initialize()
     with connection() as db:
         row = db.execute('''
-            SELECT id, status, call_sid, context, outcome, reason, disposition
+            SELECT id, status, call_sid, context, outcome, reason, disposition, voicemail
             FROM alli_appointment_dispatch WHERE id = %s
         ''', (key,)).fetchone()
     if row is None:
         return None
     return dict(zip(
-        ('key', 'status', 'call_sid', 'context', 'outcome', 'reason', 'disposition'), row
+        ('key', 'status', 'call_sid', 'context', 'outcome', 'reason', 'disposition', 'voicemail'), row
     ))
 
 
@@ -205,4 +210,50 @@ def record_disposition(key: str, call_sid: str, disposition: str) -> bool:
             RETURNING id
         ''', (call_sid, disposition, key, call_sid, disposition,
               _DISPOSITION_RANK[disposition])).fetchone()
+    return row is not None
+
+
+def claim_voicemail(key: str, call_sid: str, message: str) -> bool:
+    """Commit one voicemail attempt before permitting a Twilio redirect.
+
+    The caller prepares the privacy-safe message. Bind an early callback's SID
+    only if absent; a different SID or any existing voicemail record prevents
+    another attempt, even after a crash or an ambiguous redirect response.
+    Exceptions also mean the caller must not redirect.
+    """
+    if not isinstance(call_sid, str) or not call_sid.strip():
+        raise ValueError('A nonempty call SID is required')
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError('A nonempty voicemail message is required')
+    initialize()
+    with connection() as db:
+        row = db.execute('''
+            UPDATE alli_appointment_dispatch
+            SET call_sid = COALESCE(call_sid, %s), voicemail = %s, updated_at = now()
+            WHERE id = %s AND status IN ('dispatching', 'queued', 'uncertain')
+                AND (call_sid IS NULL OR call_sid = %s)
+                AND voicemail IS NULL
+            RETURNING id
+        ''', (call_sid, Jsonb({'status': 'pending', 'message': message}),
+              key, call_sid)).fetchone()
+    # Commit must complete before the caller can redirect a live call.
+    return row is not None
+
+
+def finish_voicemail(key: str, status: Literal['submitted', 'uncertain']) -> bool:
+    """Finalize only a pending attempt without making voicemail retryable.
+
+    Submitted means the redirect was accepted, not proof a voicemail was heard.
+    A terminal record cannot be replaced, including by an identical retry.
+    """
+    if status not in ('submitted', 'uncertain'):
+        raise ValueError('Unsupported voicemail status')
+    initialize()
+    with connection() as db:
+        row = db.execute('''
+            UPDATE alli_appointment_dispatch
+            SET voicemail = jsonb_set(voicemail, '{status}', %s), updated_at = now()
+            WHERE id = %s AND voicemail ->> 'status' = 'pending'
+            RETURNING id
+        ''', (Jsonb(status), key)).fetchone()
     return row is not None

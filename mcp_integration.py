@@ -181,6 +181,7 @@ def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_m
             preset: Literal['generic', 'scheduling', 'confirmation', 'follow_up'] | None = None,
             capabilities: Annotated[list[Literal['check_calendar', 'create_meeting']], Field(max_length=2,
                 description='Only capabilities John explicitly authorized for this call; empty by default; create_meeting also requires check_calendar')] = [],
+            voicemail_policy: Literal['generic_message', 'hang_up'] = 'generic_message',
             email: Annotated[str, Field(max_length=320, description='Recipient email bound to this call; required for booking, cannot be substituted during the call')] = '',
             appointment_start: AwareDatetime | None = None,
             appointment_end: AwareDatetime | None = None,
@@ -189,7 +190,7 @@ def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_m
             body = outbound_model(
                 request_id=request_id, phone=phone, recipient_name=recipient_name,
                 mission=mission, purpose=purpose, preset=preset,
-                capabilities=capabilities, email=email,
+                capabilities=capabilities, voicemail_policy=voicemail_policy, email=email,
                 appointment_start=appointment_start, appointment_end=appointment_end,
                 approved_logistics=approved_logistics,
             )

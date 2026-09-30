@@ -18,9 +18,19 @@ class MemoryLedger:
     def get(self,key): return self.rows.get(key)
     def queued(self,key,sid): self.rows[key].update(status='queued',call_sid=sid); return True
     def uncertain(self,key): self.rows[key]['status']='uncertain'; return True
+    def blocked(self,key,reason): self.rows[key].update(status='blocked',reason=reason); return True
     def record_outcome(self,key,result):
         if self.rows[key]['outcome'] not in (None,result): return False
         self.rows[key]['outcome']=result
+        return True
+    def claim_voicemail(self,key,sid,message):
+        row=self.rows[key]
+        if row.get('voicemail') or row['call_sid'] not in (None,sid): return False
+        row['call_sid']=sid
+        row['voicemail']={'status':'pending','message':message}
+        return True
+    def finish_voicemail(self,key,status):
+        self.rows[key]['voicemail']['status']=status
         return True
     def record_disposition(self,key,sid,status):
         if self.rows[key]['call_sid'] not in (None,sid): return False
@@ -60,7 +70,7 @@ def test_isolated_channel_claim_and_outcome(service,monkeypatch):
         assert 'PROPERTY DEMO SECRET' not in options.session_config['instructions']
         assert channel._provider.config.default_session_config is None
         assert set(channel._provider._tools_by_name)=={'report_call_outcome','end_call'}
-        assert options.call_options.machine_detection=='Enable'
+        assert options.call_options.machine_detection=='DetectMessageEnd'
         assert options.call_options.time_limit==900
         # Even a malicious model request cannot execute a demo action.
         denied=await channel._provider._run_tool_call('test','send_email','{}')
@@ -75,6 +85,8 @@ def test_isolated_channel_claim_and_outcome(service,monkeypatch):
         assert (await outcome(attendance='not_applicable',questions=['When is the next workshop?'],follow_up_needed=True,summary='Asked about the next workshop.'))['ok']
         read=await adapter.read_result(body.request_id)
         channels[0].end_call=AsyncMock()
+        assert not (await channels[0]._provider._tools_by_name['end_call']())['ok']
+        channels[0]._alli_answered_by='human'
         assert (await channels[0]._provider._tools_by_name['end_call']())['ok']
         channels[0].end_call.assert_awaited_once_with('CA-test')
         return one,two,read
@@ -115,7 +127,9 @@ def test_http_auth_and_signed_callbacks(service,monkeypatch):
     from outbound_profiles import OutboundCall
     api=FastAPI(); adapter.install(api,OutboundCall)
     key=voice.request_key(body.request_id); store.claim(key,{})
-    channel=SimpleNamespace(_alli_ledger_key=key,end_call=AsyncMock())
+    channel=SimpleNamespace(_alli_ledger_key=key,_alli_voicemail_message='Safe generic voicemail',end_call=AsyncMock())
+    submitted=[]
+    monkeypatch.setattr(adapter,'_submit_voicemail',lambda channel,sid,message:submitted.append((sid,message)))
     adapter.channels['token']=channel
     with TestClient(api,base_url='https://example.com') as client:
         assert client.get('/outbound-calls/test-1').status_code==401
@@ -130,9 +144,15 @@ def test_http_auth_and_signed_callbacks(service,monkeypatch):
         url='https://example.com/outbound/amd/token'
         sig=RequestValidator('test').compute_signature(url,amd)
         assert client.post(url,data=amd,headers={'X-Twilio-Signature':sig}).json()['ok']
-        channel.end_call.assert_awaited_once_with('CA-test')
-        assert store.rows[key]['outcome']['source']=='telephony_detection'
-        assert store.rows[key]['outcome']['answered_by']=='machine_start'
+        channel.end_call.assert_not_awaited()
+        assert submitted==[]
+        amd['AnsweredBy']='machine_end_beep'
+        sig=RequestValidator('test').compute_signature(url,amd)
+        assert client.post(url,data=amd,headers={'X-Twilio-Signature':sig}).json()['ok']
+        assert client.post(url,data=amd,headers={'X-Twilio-Signature':sig}).json()['ok']
+        assert submitted==[('CA-test','Safe generic voicemail')]
+        assert store.rows[key]['voicemail']['status']=='submitted'
+        assert store.rows[key]['outcome'] is None
 
 
 def test_owner_test_mode_blocks_other_recipients_and_calendar(service,monkeypatch):
@@ -168,3 +188,38 @@ def test_readback_can_reconcile_only_the_bound_call(service, monkeypatch):
     assert result['outcome'] is None
     assert asyncio.run(adapter.read_result('missing'))['status']=='not_found'
     assert seen==['CA-bound']
+
+
+def test_fresh_validation_after_claim_blocks_without_dial(service,monkeypatch):
+    voice,adapter,store,body=service
+    monkeypatch.setenv('OUTBOUND_CALLS_ENABLED','true')
+    dial=AsyncMock()
+    monkeypatch.setattr(voice.VoiceChannel,'initiate_outbound_conversation',dial)
+    async def revalidate():
+        assert store.rows[voice.request_key(body.request_id)]['status']=='dispatching'
+        return False
+    result=asyncio.run(adapter.initiate(body,before_dial=revalidate))
+    assert result['status']=='blocked' and not result['ok']
+    assert store.rows[voice.request_key(body.request_id)]['status']=='blocked'
+    dial.assert_not_awaited()
+
+
+def test_voicemail_contains_no_private_call_context(service):
+    voice,_,_,body=service
+    body=body.model_copy(update={'mission':'SECRET MISSION','approved_logistics':'SECRET ADDRESS','recipient_name':'PRIVATE RECIPIENT'})
+    message=voice.voicemail_message(body)
+    assert 'Alli' in message and 'Charleston AI' in message
+    assert all(value not in message for value in ['SECRET MISSION','SECRET ADDRESS','PRIVATE RECIPIENT'])
+    assert 'call me back' not in message.lower()
+
+
+def test_voicemail_twiml_replaces_stream_and_hangs_up(service):
+    voice,_,_,_=service
+    saved=[]
+    client=SimpleNamespace(calls=lambda sid:SimpleNamespace(update=lambda **kw:saved.append((sid,kw))))
+    channel=SimpleNamespace(_get_twilio_client=lambda:client)
+    voice.OutboundVoice._submit_voicemail(channel,'CA-bound','Hello <friend> & goodbye')
+    assert saved[0][0]=='CA-bound'
+    assert '&lt;friend&gt; &amp;' in saved[0][1]['twiml']
+    assert '<Hangup' in saved[0][1]['twiml']
+    assert '<Connect' not in saved[0][1]['twiml']

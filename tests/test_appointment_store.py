@@ -48,7 +48,9 @@ def test_initialize_commits_before_marking_success(db, monkeypatch):
     assert db.events[-1] == 'commit'
     assert 'pg_advisory_xact_lock' in db.execute.call_args_list[0].args[0]
     assert 'CREATE TABLE IF NOT EXISTS' in db.execute.call_args_list[1].args[0]
+    assert 'voicemail jsonb' in db.execute.call_args_list[1].args[0]
     assert 'ADD COLUMN IF NOT EXISTS disposition' in db.execute.call_args_list[2].args[0]
+    assert 'ADD COLUMN IF NOT EXISTS voicemail jsonb' in db.execute.call_args_list[3].args[0]
     calls = store.connection.call_count
     store.initialize()
     assert store.connection.call_count == calls
@@ -78,11 +80,12 @@ def test_claim_commit_failure_never_grants_permission(db):
 
 
 def test_get_returns_all_independent_states(db):
-    db.row = ('key', 'uncertain', 'CA123', {'event_id': 'event'}, 'confirmed', None, 'completed')
+    voicemail = {'status': 'submitted', 'message': 'Please call us back.'}
+    db.row = ('key', 'uncertain', 'CA123', {'event_id': 'event'}, 'confirmed', None, 'completed', voicemail)
     assert store.get('key') == {
         'key': 'key', 'status': 'uncertain', 'call_sid': 'CA123',
         'context': {'event_id': 'event'}, 'outcome': 'confirmed',
-        'reason': None, 'disposition': 'completed',
+        'reason': None, 'disposition': 'completed', 'voicemail': voicemail,
     }
     db.row = None
     assert store.get('missing') is None
@@ -176,8 +179,64 @@ def test_unknown_disposition_and_empty_sid_rejected_without_database(db):
     (store.blocked, ('key', 'reason')),
     (store.record_outcome, ('key', 'confirmed')),
     (store.record_disposition, ('key', 'CA123', 'completed')),
+    (store.claim_voicemail, ('key', 'CA123', 'Please call us back.')),
+    (store.finish_voicemail, ('key', 'submitted')),
 ])
 def test_guarded_updates_return_false_when_no_row_matches(db, method, args):
     db.row = None
     assert method(*args) is False
     assert db.events[-1] == 'commit'
+
+
+def test_voicemail_claim_commits_once_binds_sid_and_preserves_other_states(db):
+    message = 'This is Alli from Charleston AI. Please call us back.'
+    assert store.claim_voicemail('key', 'CA123', message)
+    assert db.events[-1] == 'commit'
+    sql, params = db.execute.call_args.args
+    assert params[0] == params[3] == 'CA123'
+    assert params[1].obj == {'status': 'pending', 'message': message}
+    assert params[2] == 'key'
+    assert 'call_sid = COALESCE(call_sid, %s)' in sql
+    assert '(call_sid IS NULL OR call_sid = %s)' in sql
+    assert "status IN ('dispatching', 'queued', 'uncertain')" in sql
+    assert 'AND voicemail IS NULL' in sql
+    assert 'outcome' not in sql
+    assert 'disposition' not in sql
+    assert 'SET status' not in sql
+
+
+def test_voicemail_claim_commit_failure_never_grants_redirect_permission(db):
+    db.fail_commit = True
+    with pytest.raises(RuntimeError, match='commit failed'):
+        store.claim_voicemail('key', 'CA123', 'Please call us back.')
+
+
+@pytest.mark.parametrize('sid,message', [
+    (None, 'Hello'), ('', 'Hello'), ('   ', 'Hello'), (123, 'Hello'),
+    ('CA123', None), ('CA123', ''), ('CA123', '   '), ('CA123', 123),
+])
+def test_voicemail_claim_invalid_inputs_do_not_touch_database(db, sid, message):
+    with pytest.raises(ValueError):
+        store.claim_voicemail('key', sid, message)
+    db.execute.assert_not_called()
+
+
+@pytest.mark.parametrize('status', ['submitted', 'uncertain'])
+def test_finish_voicemail_only_finalizes_pending_preserving_message(db, status):
+    assert store.finish_voicemail('key', status)
+    assert db.events[-1] == 'commit'
+    sql, params = db.execute.call_args.args
+    assert params[0].obj == status
+    assert params[1] == 'key'
+    assert "jsonb_set(voicemail, '{status}', %s)" in sql
+    assert "voicemail ->> 'status' = 'pending'" in sql
+    assert 'outcome' not in sql
+    assert 'disposition' not in sql
+    assert 'SET status' not in sql
+
+
+@pytest.mark.parametrize('status', ['pending', 'delivered', '', None])
+def test_finish_voicemail_rejects_invalid_status_without_database(db, status):
+    with pytest.raises(ValueError, match='voicemail status'):
+        store.finish_voicemail('key', status)
+    db.execute.assert_not_called()
