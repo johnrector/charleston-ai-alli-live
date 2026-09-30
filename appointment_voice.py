@@ -1,6 +1,7 @@
 """Isolated outbound profiles on TAC 2.5. No schedules or calls at import time."""
 import asyncio
 import hashlib
+import logging
 import os
 import secrets
 from typing import Literal
@@ -51,10 +52,11 @@ class OutboundVoice:
     an uncorrelated/replayed connection cannot fall back to the demo instructions.
     Requires one process, as TAC's session transport is process-local.
     """
-    def __init__(self, tac, base_session, store=ledger):
+    def __init__(self, tac, base_session, store=ledger, read_provider=False):
         self.tac, self.base_session, self.store = tac, base_session, store
         self.channels = {}
         self.max_pending = 100
+        self.read_provider = read_provider
 
     async def initiate(self, body):
         enabled = os.getenv('OUTBOUND_CALLS_ENABLED', '').lower() == 'true'
@@ -73,7 +75,7 @@ class OutboundVoice:
             existing = await asyncio.to_thread(self.store.get, key)
             if existing and existing['context'] != context:
                 raise HTTPException(409, 'This request ID belongs to different call details; do not reuse it')
-            return self.public_result(body.request_id, existing)
+            return await self.read_result(body.request_id)
         token = secrets.token_urlsafe(32)
         tool = outcome_tool(key, self.store)
         call_sid_ref = {'value': None}
@@ -87,6 +89,7 @@ class OutboundVoice:
                 sid = row.get('call_sid') if row else None
             if not sid:
                 return {'ok': False, 'error': 'This call binding is not ready'}
+            logging.getLogger('alli.call').info('outbound_end_call call_sid=%s source=conversation_tool', sid)
             await channel.end_call(sid)
             return {'ok': True}
 
@@ -131,7 +134,24 @@ class OutboundVoice:
 
     async def read_result(self, request_id):
         row = await asyncio.to_thread(self.store.get, request_key(request_id))
-        return self.public_result(request_id, row)
+        result = self.public_result(request_id, row)
+        if self.read_provider and row and row.get('call_sid'):
+            try:
+                details = await asyncio.to_thread(self._provider_details, row['call_sid'])
+                result.update(details)
+            except Exception:
+                result['provider_lookup'] = 'unavailable'
+        return result
+
+    def _provider_details(self, call_sid):
+        # Exact previously claimed call only. Never enumerate calls or create one.
+        from twilio.rest import Client
+        from twilio.http.http_client import TwilioHttpClient
+        client = Client(self.tac.config.api_key, self.tac.config.api_secret,
+                        self.tac.config.account_sid, http_client=TwilioHttpClient(timeout=5))
+        call = client.calls(call_sid).fetch()
+        return {'provider_lookup': 'verified', 'provider_status': call.status,
+                'answered_by': call.answered_by, 'duration_seconds': call.duration}
 
     def install(self, app, call_model):
         http_sig = build_http_signature_dependency(self.tac.config.auth_token)
@@ -183,7 +203,16 @@ class OutboundVoice:
             if row and row.get('call_sid') and row['call_sid'] != sid:
                 raise HTTPException(409, 'Call binding mismatch')
             # Conservative hang-up policy: machines, fax, unknown all stop.
-            if form.get('AnsweredBy') != 'human':
+            detected = str(form.get('AnsweredBy', 'unknown'))
+            if detected not in {'human', 'fax', 'unknown', 'machine_start', 'machine_end_beep', 'machine_end_silence', 'machine_end_other'}:
+                detected = 'unknown'
+            logging.getLogger('alli.call').info('outbound_amd call_sid=%s answered_by=%s', sid, detected)
+            if detected != 'human':
+                await asyncio.to_thread(self.store.record_outcome, channel._alli_ledger_key, {
+                    'attendance': 'unclear', 'questions': [], 'follow_up_needed': True,
+                    'summary': 'Answer classification was ' + detected + '; the conservative gate requested hang-up before a human conversation was confirmed.',
+                    'source': 'telephony_detection', 'answered_by': detected,
+                })
                 await channel.end_call(sid)
             return {'ok': True}
 

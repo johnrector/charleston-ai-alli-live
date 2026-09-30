@@ -134,7 +134,7 @@ voice_channel = VoiceChannel(
 from mcp_integration import install_mcp
 from outbound_profiles import OutboundCall
 from appointment_voice import OutboundVoice
-outbound_voice = OutboundVoice(tac, SESSION_CONFIG)
+outbound_voice = OutboundVoice(tac, SESSION_CONFIG, read_provider=True)
 outbound_voice.install(app, OutboundCall)
 mcp = install_mcp(app, initiate_demo_call, DemoCall,
                   initiate_outbound=outbound_voice.initiate,

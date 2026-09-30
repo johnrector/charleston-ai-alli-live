@@ -131,6 +131,8 @@ def test_http_auth_and_signed_callbacks(service,monkeypatch):
         sig=RequestValidator('test').compute_signature(url,amd)
         assert client.post(url,data=amd,headers={'X-Twilio-Signature':sig}).json()['ok']
         channel.end_call.assert_awaited_once_with('CA-test')
+        assert store.rows[key]['outcome']['source']=='telephony_detection'
+        assert store.rows[key]['outcome']['answered_by']=='machine_start'
 
 
 def test_owner_test_mode_blocks_other_recipients_and_calendar(service,monkeypatch):
@@ -148,3 +150,21 @@ def test_owner_test_mode_blocks_other_recipients_and_calendar(service,monkeypatc
         assert (await adapter.initiate(body))['status']=='queued'
     asyncio.run(run())
     assert dial.await_count==1
+
+
+def test_readback_can_reconcile_only_the_bound_call(service, monkeypatch):
+    voice,adapter,store,body=service
+    key=voice.request_key(body.request_id)
+    store.claim(key,{})
+    store.queued(key,'CA-bound')
+    adapter.read_provider=True
+    seen=[]
+    def details(sid):
+        seen.append(sid)
+        return {'provider_lookup':'verified','provider_status':'completed','answered_by':'machine','duration_seconds':'4'}
+    monkeypatch.setattr(adapter,'_provider_details',details)
+    result=asyncio.run(adapter.read_result(body.request_id))
+    assert seen==['CA-bound'] and result['answered_by']=='machine'
+    assert result['outcome'] is None
+    assert asyncio.run(adapter.read_result('missing'))['status']=='not_found'
+    assert seen==['CA-bound']
