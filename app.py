@@ -89,7 +89,8 @@ def call_session(body: DemoCall):
 async def health():
     return {"ok": True, "voice_model": "gpt-live-1", "reasoning_model": "gpt-5.6-sol",
             "build_commit": os.getenv("RENDER_GIT_COMMIT", "local"),
-            "outbound_api": "mission-capabilities-v1",
+            "outbound_api": "manual-actions-v2",
+            "manual_actions_enabled": os.getenv("MANUAL_CALL_ACTIONS_ENABLED", "").lower() == "true",
             "automatic_calls_enabled": os.getenv("APPOINTMENT_AUTOMATION_ENABLED", "").lower() == "true"}
 
 @app.post("/demo-call")

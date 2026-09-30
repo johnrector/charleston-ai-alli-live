@@ -2,47 +2,49 @@
 
 ## Current deployment posture
 
-General/client outbound calls and automatic calling remain disabled. Owner-only
-verification uses `OUTBOUND_TEST_PHONE`; calendar actions are denied in this mode.
-No real contact directory or calendar opt-in policy is installed. Secrets remain
-in Render; do not paste administrator keys, API keys or OAuth tokens into chat.
+John authorized production manual calling and the complete calendar/email workflow
+on September 30, 2026. `OUTBOUND_CALLS_ENABLED=true` enables dialing;
+`MANUAL_CALL_ACTIONS_ENABLED=true` grants mission-related calendar and email actions
+to manual MCP calls by default. Set the latter false only for conversation-only
+script tests. Automatic future appointment calling remains separately configured.
+Secrets remain in Render and must never be pasted into chat or logs.
 
 ## Plugin API
 
-After refreshing the plugin's tools, use `call_outbound` with a stable unique
-`request_id`, E.164 `phone`, `recipient_name`, and the approved `mission`.
-`purpose` is an optional free-text label; it never grants permissions.
-`preset` may be `generic`, `scheduling`, `confirmation` or `follow_up`, or omitted.
-Confirm/follow-up presets require aware `appointment_start` and `appointment_end`.
+`call_contact` keeps its existing signature, so already-connected clients gain the
+production workflow without a tool refresh. Supply the verified recipient name,
+phone, mission and email when known. If email is missing the caller can ask the
+verified recipient for it. Supplied email cannot be substituted during the call.
 
-- `capabilities: []` permits conversation/outcome capture only
-- `capabilities: ["check_calendar"]` permits live availability lookup
-- `capabilities: ["check_calendar", "create_meeting"]` permits an agreed new booking
-  with the provided, validated `email`; the recipient cannot substitute another
-  email. Identity and explicit agreement to the exact slot are required
-- `approved_logistics` contains only shareable facts, not raw event descriptions
-- `voicemail_policy` is `generic_message` by default or `hang_up` when no message
-  is appropriate. Voicemail never copies raw mission/contact/appointment details
+`call_outbound` accepts a stable request_id. Omitted capabilities inherit the
+owner-enabled manual defaults; explicit [] requests conversation only. The full
+set is check_calendar, create_meeting, manage_calendar, send_email.
 
-A conversation may evolve into scheduling only within its granted capabilities.
-Editing/cancelling existing events, sending separate email and additional calls
-are not granted. Google creation sends a Calendar invitation after agreement.
-The existing free/busy recheck and deterministic event ID prevent common duplicate
-bookings. Recovered bookings are reread and validated before success is reported.
+Calendar tools find this recipient's events, create agreed new meetings, update
+existing meeting times, and cancel agreed meetings. Updates preserve the event ID
+and attendees, use the event version, recheck conflicts and read back the result.
+Separate email uses the connected Gmail send permission. Each action must remain
+within John's mission and verified recipient agreement. No inbox-read permission
+is granted by this change. A preset or raw business-card text never grants actions.
 
-Use `get_call_result(request_id)` to read status, provider disposition,
-model-reported `outcome`, and separate `voicemail` submission state.
-`submitted` means Twilio accepted voicemail playback instructions, not independent
-proof the recipient mailbox stored it. An uncertain voicemail is never replayed.
-Provider `completed` means the phone call ended; it does not prove a conversation,
-attendance, booking, or voicemail delivery.
+Exact repeated call_contact inputs read the existing intent, even after a manual
+permission change. A database lock by recipient phone also blocks different
+requests arriving within two minutes or while a call is still active (up to the
+15-minute call limit plus cleanup). The blocked response gives the original ID.
+Do not alter incidental fields to evade deduplication or retry an uncertain call.
 
-Already-connected clients can keep using `call_contact` with the original fields.
-It uses the generic path with no calendar capabilities. A deterministic ID hashes
-all original validated inputs, with phone normalization and blank-brief fallback.
-Repeating those exact inputs reads the existing intent and cannot redial. An
-intentional later call should use `call_outbound` with a new authorized request ID.
-Do not vary incidental fields to evade deduplication. `/demo-call` is legacy only.
+Use get_call_result(request_id) for a read-only result. Refresh the plugin's tool
+catalog if the client only exposes call_contact. As a compatibility fallback,
+identical call_contact inputs read the existing intent without redialing.
+
+Conversation reports are saved by the in-call tool. On disconnect, the SDK's
+on_conversation_ended hook stores the available transcript if no report exists.
+The fallback is explicitly labelled call_end_transcript and does not invent a
+confirmed outcome or verified calendar action. Provider completed only means the
+call ended. No transcript content is written to runtime logs.
+
+Startup verifies live Calendar access and the Gmail send scope, logging booleans
+only. Tests mock external mutations: no test calls or emails are sent to clients.
 
 ## HTTP operations
 
@@ -68,8 +70,7 @@ Restart cannot clear durable claims or make uncertain calls retryable.
 3. Approve recipient-local quiet hours, the weekly follow-up local hour/window,
    voicemail policy, and any calendar capabilities granted to automatic calls
 4. Review a dry-run candidate preview and conduct controlled real-call checks
-5. Only then enable general calls and the automation loop. Do not enable either
-   merely because local tests pass
+5. Only then enable the automation loop. Manual calling has separate owner approval
 
 ## Server-owned configuration
 

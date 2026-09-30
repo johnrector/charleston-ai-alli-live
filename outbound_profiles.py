@@ -19,7 +19,7 @@ from google_integration import check_calendar, create_meeting, email_address
 REQUEST_ID_PATTERN = r'^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$'
 PHONE_PATTERN = r'^\+[1-9][0-9]{7,14}$'
 Preset = Literal['generic', 'scheduling', 'confirmation', 'follow_up']
-Capability = Literal['check_calendar', 'create_meeting']
+Capability = Literal['check_calendar', 'create_meeting', 'manage_calendar', 'send_email']
 
 
 class OutboundCall(BaseModel):
@@ -37,7 +37,7 @@ class OutboundCall(BaseModel):
     mission: str = Field(min_length=1, max_length=4000)
     purpose: str = Field(default='', max_length=200)
     preset: Preset | None = None
-    capabilities: list[Capability] = Field(default_factory=list, max_length=2)
+    capabilities: list[Capability] = Field(default_factory=list, max_length=4)
     voicemail_policy: Literal['generic_message', 'hang_up'] = 'generic_message'
     email: str = Field(default='', max_length=320)
     appointment_start: AwareDatetime | None = Field(default=None, strict=False)
@@ -163,18 +163,20 @@ def tools_for(body: OutboundCall, outcome_tool):
     result = []
     if 'check_calendar' in body.capabilities:
         result.append(check_calendar)
-    if 'create_meeting' in body.capabilities:
+    if 'create_meeting' in body.capabilities and 'manage_calendar' not in body.capabilities:
         result.append(_booking_tool(body))
+    from call_actions import tools_for_call
+    result.extend(tools_for_call(body))
     return result + [outcome_tool]
 
 
-def session_for(body: OutboundCall, base_session, outcome_tool):
+def session_for(body: OutboundCall, base_session, outcome_tool, executable_tools=None):
     """Inherit only model/audio transport settings, never demo prompts or tools.
 
     The provider must separately use tools_for for its executable registry.
     Its booking wrappers are stateless and bind the same validated call body.
     """
-    executable_tools = tools_for(body, outcome_tool)
+    executable_tools = executable_tools if executable_tools is not None else tools_for(body, outcome_tool)
     session = {key: deepcopy(base_session[key]) for key in ('model', 'audio') if key in base_session}
     context = {
         'recipient_name': body.recipient_name,
@@ -200,8 +202,14 @@ def session_for(body: OutboundCall, base_session, outcome_tool):
             'CAPABILITIES: You have no calendar tools. Do not offer definite meeting slots, book, move, or cancel events. '
             'Capture scheduling requests for John without claiming a calendar change.\n'
         )
+    common = COMMON_INSTRUCTIONS
+    if 'manage_calendar' in body.capabilities or 'send_email' in body.capabilities:
+        from call_actions import ACTION_INSTRUCTIONS
+        common = common.replace('Do not send email, purchase anything, make unrelated commitments, initiate another call, or start automatic future activity. Calendar invitations are permitted only through an explicitly granted create_meeting tool after its consent requirements are met.', 'Do not purchase anything, make unrelated commitments, initiate another call, or start automatic future activity.')
+        common = common.replace('You cannot move or cancel existing events. Record those requests for John and say the calendar remains unchanged.', '')
+        capability_instructions = ACTION_INSTRUCTIONS
     session['instructions'] = (
-        COMMON_INSTRUCTIONS + '\n' + PROFILE_INSTRUCTIONS.get(body.preset or 'generic', '')
+        common + '\n' + PROFILE_INSTRUCTIONS.get(body.preset or 'generic', '')
         + '\n' + capability_instructions
         + f'\nOUTCOME CAPTURE: Use {outcome_tool.name} to record the actual conversation result according to its schema. '
         'Use attendance=not_applicable for calls where attendance was not discussed; use unclear when it was discussed but not established. '

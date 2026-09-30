@@ -46,7 +46,7 @@ def times():
     {'email': 'bad'}, {'email': 'a@example.com\nBcc: b@example.com'},
     {'approved_logistics': 'x' * 1501}, {'purpose': 'x' * 201},
     {'unexpected': True}, {'recipient_name': 4},
-    {'capabilities': ['send_email']}, {'capabilities': ['create_meeting']},
+    {'capabilities': ['delete_database']}, {'capabilities': ['create_meeting']},
     {'capabilities': ['check_calendar', 'check_calendar']},
     {'appointment_start': '2030-01-07T15:30:00'},
     {'preset': 'confirmation'}, {'preset': 'follow_up'},

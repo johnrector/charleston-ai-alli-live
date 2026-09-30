@@ -69,6 +69,7 @@ class OutboundVoice:
         self.channels = {}
         self.max_pending = 100
         self.read_provider = read_provider
+        tac.on_conversation_ended(self.conversation_ended)
 
     async def initiate(self, body, before_dial=None):
         enabled = os.getenv('OUTBOUND_CALLS_ENABLED', '').lower() == 'true'
@@ -88,7 +89,13 @@ class OutboundVoice:
         context = body.model_dump(mode='json')
         if len(self.channels) >= self.max_pending:
             raise HTTPException(503, 'Call capacity reached; review existing calls before retrying')
-        if not await asyncio.to_thread(self.store.claim, key, context):
+        try:
+            claim = getattr(self.store, 'claim_with_recipient_guard', self.store.claim)
+            claimed = await asyncio.to_thread(claim, key, context)
+        except ledger.RecentRecipientCall as exc:
+            return {'ok': False, 'request_id': body.request_id, 'status': 'duplicate_recipient_blocked',
+                    'existing_request_id': exc.request_id, 'error': 'A call to this person is already active or was started within two minutes. Read its result; do not redial.'}
+        if not claimed:
             existing = await asyncio.to_thread(self.store.get, key)
             comparison = dict(context)
             if existing and 'voicemail_policy' not in existing['context']:
@@ -126,11 +133,12 @@ class OutboundVoice:
             await channel.end_call(sid)
             return {'ok': True}
 
-        session = session_for(body, self.base_session, tool)
+        executable_tools = tools_for(body, tool)
+        session = session_for(body, self.base_session, tool, executable_tools=executable_tools)
         session['delegation']['responses']['tools'].append(end_call.to_realtime_format())
         session['instructions'] += '\nCALL ENDING: After recording the final outcome, use end_call to hang up. For a wrong person or refusal, use end_call with reason=wrong_person or reason=refused immediately. If you hear voicemail, stop speaking and wait for the service, rather than using end_call. It can only end this call.\n'
         channel = VoiceChannel(self.tac, config=GPTLiveProviderConfig(
-            tools=tools_for(body, tool) + [end_call], default_session_config=None,
+            tools=executable_tools + [end_call], default_session_config=None,
             welcome_instruction='Speak immediately. Follow the purpose-specific OPENING in this session and then listen.'))
         channel._alli_ledger_key = key
         channel._alli_voicemail_message = voicemail_message(body)
@@ -160,6 +168,26 @@ class OutboundVoice:
             asyncio.get_running_loop().call_later(960, self.channels.pop, token, None)
             await asyncio.to_thread(self.store.uncertain, key)
             raise
+
+    async def conversation_ended(self, session):
+        """Save transcript even when the recipient hangs up before the outcome tool."""
+        sid = session.call_sid or session.conversation_id
+        if not hasattr(self.store, 'find_by_call_sid'):
+            return
+        row = await asyncio.to_thread(self.store.find_by_call_sid, sid)
+        if not row or row.get('outcome') is not None:
+            return
+        transcript = [{'role': t.get('role'), 'text': str(t.get('text', ''))[:12000]}
+                      for t in session.metadata.get('transcript', [])[-100:]
+                      if t.get('role') in ('user', 'assistant') and t.get('text')]
+        outcome = {'source': 'call_end_transcript', 'attendance': 'unclear',
+                   'questions': [], 'follow_up_needed': True,
+                   'summary': 'Call ended without an in-call report. Review the captured transcript.',
+                   'transcript': transcript}
+        if not transcript:
+            outcome['summary'] = 'Call ended without an in-call report or available transcript; outcome is unconfirmed.'
+        saved = await asyncio.to_thread(self.store.record_outcome, row['key'], outcome)
+        logging.getLogger('alli.call').info('outbound_report_saved call_sid=%s saved=%s transcript_turns=%s', sid, saved, len(transcript))
 
     @staticmethod
     def public_result(request_id, row):

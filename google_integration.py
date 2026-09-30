@@ -122,11 +122,11 @@ class GoogleError(Exception):
     pass
 
 
-def api(method, path, *, body=None, params=None, credentials=None):
+def api(method, path, *, body=None, params=None, credentials=None, extra_headers=None):
     credentials = credentials or fresh_credentials()
     with httpx.Client(timeout=25) as client:
         r = client.request(method, 'https://www.googleapis.com/' + path,
-            headers={'Authorization': 'Bearer ' + credentials.token}, json=body, params=params)
+            headers={'Authorization': 'Bearer ' + credentials.token, **(extra_headers or {})}, json=body, params=params)
     if not r.is_success:
         raise GoogleError(f'Google rejected the operation (HTTP {r.status_code}); success is not confirmed.')
     return r.json() if r.content else {}

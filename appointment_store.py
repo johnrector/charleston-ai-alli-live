@@ -257,3 +257,38 @@ def finish_voicemail(key: str, status: Literal['submitted', 'uncertain']) -> boo
             RETURNING id
         ''', (Jsonb(status), key)).fetchone()
     return row is not None
+
+
+class RecentRecipientCall(Exception):
+    def __init__(self, request_id):
+        self.request_id = request_id
+        super().__init__('A call to this recipient is already active or was just started')
+
+
+def claim_with_recipient_guard(key, context):
+    """Serialize by phone, including different intents from simultaneous clients."""
+    initialize()
+    with connection() as db:
+        db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', (context['phone'],))
+        if db.execute('SELECT id FROM alli_appointment_dispatch WHERE id=%s', (key,)).fetchone():
+            return False
+        recent = db.execute('''
+            SELECT context FROM alli_appointment_dispatch
+            WHERE context->>'phone'=%s AND status <> 'blocked'
+              AND (created_at > now() - interval '2 minutes'
+                   OR (disposition IS NULL AND created_at > now() - interval '16 minutes'))
+            ORDER BY created_at DESC LIMIT 1
+        ''', (context['phone'],)).fetchone()
+        if recent:
+            raise RecentRecipientCall(recent[0].get('request_id'))
+        row = db.execute('''INSERT INTO alli_appointment_dispatch(id,status,context)
+            VALUES (%s,'dispatching',%s) ON CONFLICT(id) DO NOTHING RETURNING id''',
+            (key, Jsonb(context))).fetchone()
+    return row is not None
+
+
+def find_by_call_sid(call_sid):
+    initialize()
+    with connection() as db:
+        row = db.execute('SELECT id FROM alli_appointment_dispatch WHERE call_sid=%s', (call_sid,)).fetchone()
+    return get(row[0]) if row else None
