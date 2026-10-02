@@ -70,7 +70,7 @@ def test_identity_blocks_every_action_and_preserves_architecture(monkeypatch):
 def test_unknown_sender_has_no_calendar_or_email_tools():
     async def run():
         session,tools=await inbound.build_session(BASE,{},SID,CALLER,'sms',Memory())
-        assert {t.name for t in tools}=={'confirm_identity','report_call_outcome'}
+        assert {t.name for t in tools}=={'confirm_identity','remember_contact_name','report_call_outcome'}
         assert 'jane@example.com' not in session['instructions']
     asyncio.run(run())
 
@@ -166,3 +166,40 @@ def test_inbound_unready_returns_503_before_claiming(service):
         asyncio.run(service.voice({'AccountSid':ACCOUNT,'To':PHONE,'From':CALLER,'CallSid':SID}))
     assert exc.value.status_code==503
     assert not service.store.rows
+
+@pytest.mark.parametrize('channel',['voice','sms'])
+def test_owner_and_known_contact_greetings_keep_permissions_bounded(channel):
+    async def run():
+        owner={'contact':{'name':'John Rector','source':'owner_configured','is_owner':True}}
+        session,tools=await inbound.build_session(BASE,owner,SID,CALLER,channel,Memory())
+        assert "OPENING: Hi John, it's Alli. What can I help you with?" in session['instructions']
+        assert {t.name for t in tools}=={'confirm_identity','remember_contact_name','report_call_outcome'}
+        assert session['model']==BASE['model']
+        assert session['delegation']['responses']['model']==BASE['delegation']['responses']['model']
+        session,_=await inbound.build_session(BASE,CONTEXT,SID,CALLER,channel,Memory())
+        assert "OPENING: Hi Jane, it's Alli" in session['instructions']
+    asyncio.run(run())
+
+def test_unknown_sms_keeps_history_and_name_memory_does_not_grant_identity():
+    async def run():
+        memory=Memory()
+        saved=[]
+        memory.remember_name=lambda phone,name:saved.append((phone,name)) or True
+        context={'history':[{'channel':'sms','body':'My name is Jane','reply':'Hello Jane'}]}
+        session,tools=await inbound.build_session(BASE,context,SID,CALLER,'sms',memory)
+        assert 'My name is Jane' in session['instructions']
+        registry={t.name:t for t in tools}
+        result=await registry['remember_contact_name'](name='Jane')
+        assert result=={'ok':True,'greeting_only':True}
+        assert saved==[(CALLER,'Jane')]
+        assert not (await registry['confirm_identity'](name='Jane',returning_call=True))['ok']
+        assert not memory.identities
+    asyncio.run(run())
+
+def test_phone_normalization():
+    from communication_store import normalize_phone
+    assert normalize_phone('(843) 555-0100')==CALLER
+    assert normalize_phone('18435550100')==CALLER
+    assert normalize_phone(CALLER)==CALLER
+    assert normalize_phone('anonymous') is None
+    assert normalize_phone('') is None

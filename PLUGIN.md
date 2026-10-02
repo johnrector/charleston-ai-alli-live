@@ -92,9 +92,9 @@ The approved number is +1 854 444 7852. Inbound voice uses `/inbound/voice`
 with the same pinned GPT-Live voice and Responses delegation architecture.
 SMS uses `/inbound/sms` and the same reasoning model and mission-scoped tools.
 Recent outbound missions (30 days) and inbound history (7 days) are joined by
-exact phone number. Ask the returning person to independently state their name
-and confirm they are returning the call before disclosing details or using
-calendar/email tools. Unknown or ambiguous callers can leave a message only.
+normalized international phone number. Greet recognized people by first name;
+confirm their identity and agreement to continue the prior mission before
+disclosing details or using calendar/email tools. Unknown or ambiguous callers can leave a message only.
 Phone/name matching is conversational confirmation, not strong authentication;
 never handle sensitive account changes through it.
 
@@ -113,3 +113,9 @@ The service is one always-on Render process; transport sessions are in-memory,
 while missions, SMS work, transcripts and owner updates are in Postgres.
 Uncertain work is surfaced for review after a worker interruption and is never
 blindly retried. The cloud dot's monitoring schedule is configured separately.
+
+Names explicitly introduced by inbound callers or texters are stored in the cloud
+for greetings across both channels. SMS includes the recent exchange even for
+new contacts. `ALLI_OWNER_PHONE` identifies John for a distinct owner greeting;
+this does not grant new calendar/email permissions. Never ask John whether he
+is returning his own call. Ambiguous shared numbers receive a neutral greeting.

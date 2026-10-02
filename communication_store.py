@@ -1,5 +1,7 @@
 """Durable inbound queue, shared history and append-only owner update feed."""
 import json
+import os
+import phonenumbers
 from threading import Lock
 from psycopg.types.json import Jsonb
 from google_store import connection
@@ -28,6 +30,7 @@ def initialize():
             db.execute('''CREATE TABLE IF NOT EXISTS alli_return_identity (
                 phone text NOT NULL, request_id text NOT NULL, verified_at timestamptz NOT NULL DEFAULT now(),
                 PRIMARY KEY(phone,request_id))''')
+            db.execute('''CREATE TABLE IF NOT EXISTS alli_contact_name (phone text PRIMARY KEY, name text NOT NULL, source text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())''')
         _ready = True
 
 def notify(db, key, payload):
@@ -41,18 +44,46 @@ def updates(after_id=0, limit=30):
         rows = db.execute('SELECT id,payload,created_at FROM alli_communication_update WHERE id>%s ORDER BY id LIMIT %s', (after_id, limit)).fetchall()
     return {'updates':[dict(id=r[0], **r[1], created_at=r[2].isoformat()) for r in rows], 'next_cursor':rows[-1][0] if rows else after_id}
 
+def normalize_phone(value):
+    try:
+        parsed=phonenumbers.parse(value, 'US')
+        if not phonenumbers.is_possible_number(parsed):return None
+        return phonenumbers.format_number(parsed,phonenumbers.PhoneNumberFormat.E164)
+    except phonenumbers.NumberParseException:return None
+
+def remember_name(phone, name):
+    """Greeting preference only. Never grants owner status or business permissions."""
+    phone=normalize_phone(phone)
+    name=' '.join(name.strip().split())
+    if not phone or not 1<=len(name)<=100 or any(c in name for c in '\n<>'):
+        return False
+    initialize()
+    with connection() as db:
+        db.execute("""INSERT INTO alli_contact_name(phone,name,source) VALUES(%s,%s,'self_introduced')
+            ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name,source=EXCLUDED.source,updated_at=now()""",(phone,name))
+    return True
+
 def context_for(phone):
     initialize()
+    phone=normalize_phone(phone)
+    if not phone:return {'mission':None,'history':[],'contact':None}
+    owner=phone==normalize_phone(os.getenv('ALLI_OWNER_PHONE',''))
     with connection() as db:
         rows = db.execute("""SELECT context,outcome FROM alli_appointment_dispatch
             WHERE context->>'phone'=%s AND status<>'blocked' AND created_at>now()-interval '30 days'
             ORDER BY created_at DESC LIMIT 3""", (phone,)).fetchall()
-        # Ambiguous identities on a shared number must not reveal either person's record.
-        names = {r[0].get('recipient_name','').strip().casefold() for r in rows}
-        matched = rows[0][0] if rows and len(names)==1 else None
+        greeting_rows=db.execute("""SELECT context FROM alli_appointment_dispatch
+            WHERE context->>'phone'=%s AND status<>'blocked' ORDER BY created_at DESC LIMIT 3""",(phone,)).fetchall()
+        names = {r[0].get('recipient_name','').strip().casefold() for r in greeting_rows}
+        matched = rows[0][0] if rows and len(names)==1 and not owner else None
+        contact=db.execute('SELECT name,source FROM alli_contact_name WHERE phone=%s',(phone,)).fetchone()
+        if owner:contact=('John Rector','owner_configured')
+        elif greeting_rows and len(names)==1:contact=(greeting_rows[0][0]['recipient_name'],'owner_supplied_mission')
+        elif len(names)>1:contact=None
         history = db.execute("""SELECT channel,body,reply,report,transcript FROM alli_inbound
-            WHERE phone=%s AND created_at>now()-interval '7 days' ORDER BY created_at DESC LIMIT 12""", (phone,)).fetchall() if matched else []
+            WHERE phone=%s AND created_at>now()-interval '7 days' ORDER BY created_at DESC LIMIT 12""", (phone,)).fetchall()
     return {'mission':matched, 'previous_outcome': rows[0][1] if matched else None,
+            'contact':{'name':contact[0],'source':contact[1],'is_owner':owner} if contact else None,
             'history':[dict(zip(('channel','body','reply','report','transcript'), r)) for r in reversed(history)]}
 
 def receive(sid, phone, channel, body='', context=None):

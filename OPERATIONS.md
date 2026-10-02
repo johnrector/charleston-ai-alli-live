@@ -154,3 +154,13 @@ Signature tests use fixtures; live readiness is not a real phone/audio or SMS
 end-to-end test. Perform owner-initiated call and text smoke tests after cutover;
 check conversation, delivery and update-feed outcomes before claiming end-to-end
 verification. Restore the original number-specific webhook URLs to roll back.
+
+## Inbound name recognition
+
+Set `ALLI_OWNER_PHONE` to the owner-confirmed E.164 mobile number. This is a
+greeting preference only, not authentication or an expansion of tool access.
+`alli_contact_name` stores names explicitly supplied during inbound exchanges.
+Both voice and SMS use the same lookup; recent outbound mission names take
+precedence and ambiguous shared numbers receive a neutral greeting. SMS uses
+seven days of recent thread history. Keep GPT-Live and Responses delegation
+unchanged when adjusting greetings.
