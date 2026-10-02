@@ -81,6 +81,23 @@ def test_session_replaces_all_demo_context_and_keeps_base_unmodified():
     assert BASE['audio']['output']['voice'] == 'marin'
 
 
+def test_generic_mission_keeps_live_voice_and_calendar_email_delegation():
+    call = body(mission='Confirm the appointment and reschedule if needed; email the agreed details.',
+                capabilities=['check_calendar', 'create_meeting', 'manage_calendar', 'send_email'])
+    tools = p.tools_for(call, report_call_outcome)
+    session = p.session_for(call, BASE, report_call_outcome, executable_tools=tools)
+    assert session['model'] == BASE['model']
+    assert session['audio'] == BASE['audio']
+    assert session['delegation']['type'] == 'responses'
+    assert session['delegation']['responses']['model'] == BASE['delegation']['responses']['model']
+    assert {t['name'] for t in session['delegation']['responses']['tools']} == {
+        'check_calendar', 'find_meetings', 'update_meeting', 'cancel_meeting',
+        'create_meeting', 'send_email', 'report_call_outcome',
+    }
+    assert {t.name for t in tools} == {t['name'] for t in session['delegation']['responses']['tools']}
+    assert 'SECRET DEMO' not in str(session)
+
+
 def test_follow_up_can_evolve_to_booking_only_with_explicit_capabilities():
     call = body(preset='follow_up', capabilities=['check_calendar', 'create_meeting'], email='susan@example.com', **times())
     tools = p.tools_for(call, report_call_outcome)

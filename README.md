@@ -1,12 +1,12 @@
 # Charleston AI — Alli Live
 
-Persistent Twilio Agent Connect service for mission-driven outbound calls and the original real-estate demonstration.
+Persistent Twilio Agent Connect service for general-purpose, mission-driven outbound phone conversations.
 
 Architecture:
 
 Twilio Agent Connect → OpenAI GPT-Live-1 → delegated reasoning with GPT-5.6 Sol.
 
-Foreground context keeps John identity, properties, Eastern Time, recipient identity, and current mission at conversational latency.
+Each conversation receives John's identity, Eastern Time, the recipient, and the current approved mission. No property facts or fixed demo script are built in.
 
 ## Google integration
 
@@ -80,14 +80,30 @@ refresh token prevents further refresh immediately, while an already-issued
 access token can remain valid until its five-minute expiry. Rotating `DEMO_KEY`
 invalidates all current access tokens. Keep the database and its encryption key.
 
-Use the connected plugin in the demo chat. Establish the mission before sending
-the photo, for example: “For the next card, call the contact immediately. I'm
-selling my Mount Pleasant house and want to meet about representing me. Read the
-card silently, invoke call_contact, and after acceptance say only Calling.”
-Tool metadata and server instructions reinforce that flow; truthful write and
-open-world annotations remain enabled. ChatGPT controls permission prompts and
-model/vision latency, so no server can guarantee zero prompts or <10-second
-photo-to-ring latency. Measure that separately from server-to-Twilio acceptance.
+Use the connected cloud plugin from the dot. Prefer `call_outbound` for new
+requests; a card, photo, preset, and recipient email are not required to start a
+generic conversation. Each call gets its own mission, recipient, context,
+capabilities, and stable request ID. Calls return after dialing is accepted,
+so the dot can continue other independent work and read results later.
+
+For a multi-part request, the dot coordinates the appropriate connected tools:
+
+- Shopify and Maps tools handle order lookup and route creation.
+- Calendar/Contacts tools resolve appointments and verified phone numbers;
+  Alli calls each authorized recipient and can reschedule within the mission.
+- Billing and email tools handle invoices and standalone messages directly.
+  Do not place a phone call merely to send an invoice.
+
+Only the relevant call mission and shareable context go into each phone session.
+Do not pass the entire multi-task request into every call. Missing essentials
+(such as an unresolved contact or invoice rate) should block only the dependent
+work. Acknowledge briefly, start independent authorized work, then report each
+result with evidence. Never interpret these documentation examples as authority
+to dial, send email, change orders, or create invoices.
+
+See `PLUGIN.md` for cloud plugin copy and the dot workflow. Host permissions and
+model latency still apply; no server can guarantee zero prompts or a particular
+end-to-end photo-to-ring latency.
 
 Render logs record `outbound_call_accepted` and `mcp_call_accepted` with Call SID
 and elapsed milliseconds, without contact text, mission text, keys, or tokens.
@@ -101,31 +117,28 @@ Official references checked September 28, 2026:
 - https://developers.openai.com/apps-sdk/build/mcp-server
 - https://github.com/modelcontextprotocol/python-sdk/tree/v1.x
 
-## General-purpose outbound calls (disabled by default)
+## General-purpose outbound calls
 
 The reusable path is `call_outbound` (MCP) or administrator-authenticated
-`POST /outbound-call`. The existing `call_contact` now forwards to the same generic, no-calendar
-mission path so already-connected plugins do not inherit the demo.
-`/demo-call` alone remains the explicit legacy real-estate demo. New calls **do not inherit the demo instructions,
-property addresses, business-card text, or its executable tools**.
+`POST /outbound-call`. The compatible `call_contact` forwards to the same
+isolated mission path. The legacy `/demo-call` remains for existing HTTP clients,
+but its hardcoded property scenario has also been removed. Prefer the durable
+MCP path for all new work.
 
-A call is a **mission + bounded context + explicit capability envelope**.
-`purpose` is an optional descriptive label; presets provide optional starting
-points for confirmations, scheduling and follow-ups. They never grant actions.
-The conversation can evolve naturally without redeployment. For example, an
-appointment follow-up may turn into scheduling if `check_calendar` and
-`create_meeting` were explicitly authorized for this call. With no calendar
-capabilities, the same request is captured for John instead. Sending email,
-editing/cancelling events, making other calls and enrolling anyone in future
-calls are not available in this path.
+A call is a **mission + bounded context + authorized capabilities**.
+`purpose` is an optional descriptive label; presets are optional opening guides,
+not scripts or permission grants. The conversation can evolve naturally within
+the mission. With owner-enabled manual actions, omitted capabilities inherit
+calendar and email actions. Explicit `[]` requests conversation only. The dot
+should supply the capabilities needed for the authorized task. Automatic future
+calling remains separately controlled and is not enabled by a manual request.
 
 Use a stable `request_id` for one intended call, including every retry/readback.
 The compatibility `call_contact` derives its ID from normalized original inputs;
 repeating those exact inputs returns the existing call/report without dialing.
 To intentionally call again later, use `call_outbound` with a newly authorized
-request ID. Compatibility calls never gain calendar powers from their mission
-text; refresh the plugin tools and use explicit capabilities for scheduling.
-Reusing it with different details is rejected. A durable PostgreSQL claim commits
+request ID. Mission text and presets do not grant capabilities. Reusing a request ID with
+different details is rejected. A durable PostgreSQL claim commits
 before Twilio is invoked; existing claims never dial again, including a crash,
 network timeout, or uncertain response. Deliberately making another call needs a
 new authorized intent and request ID, not an automatic retry with a new UUID.
@@ -140,9 +153,12 @@ outcome closure. The model cannot choose another call's outcome ID. Booking
 capability exposes a recipient-bound wrapper, with verified identity and explicit
 agreement to exact time/duration/timezone required before the existing Google
 booking path runs. The existing Google free/busy recheck and deterministic event
-ID remain in force. Recipient email must already be supplied and validated;
-unknown email blocks booking instead of allowing arbitrary recipient injection.
-Calendar invitations are sent by Google creation; no separate email is sent.
+ID remain in force. With manage_calendar/send_email, a missing email can be
+collected from the verified recipient; a supplied email cannot be substituted.
+The narrower create_meeting-only wrapper requires an email supplied in advance.
+Calendar invitations are sent by Google; separate email needs the send_email
+capability and a successful message ID. Rescheduling updates the existing event
+instead of creating a duplicate. See `OPERATIONS.md` for the current posture.
 
 All new webhook and WebSocket routes validate Twilio signatures. Uncorrelated
 connections cannot fall back to the demo profile. Answering-machine detection uses DetectMessageEnd for the default generic

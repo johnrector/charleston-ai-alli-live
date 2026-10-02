@@ -23,4 +23,9 @@ def test_two_calls_keep_their_own_context(monkeypatch):
     assert 'susan@example.com' not in captured[1].session_config['instructions']
     assert 'bob@example.com' not in captured[0].session_config['instructions']
     assert 'susan@example.com' not in app.SESSION_CONFIG['instructions']
+    assert 'Mount Pleasant' not in captured[1].session_config['instructions']
+    assert 'Waterway Boulevard' not in str(captured[0].session_config)
+    assert captured[0].session_config['model'] == 'gpt-live-1'
+    assert captured[0].session_config['delegation']['type'] == 'responses'
+    assert captured[0].session_config['delegation']['responses']['model'] == 'gpt-5.6-sol'
     assert [t['name'] for t in captured[0].session_config['delegation']['responses']['tools']]==['check_calendar','create_meeting','send_email']
