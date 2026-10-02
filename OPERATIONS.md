@@ -139,6 +139,8 @@ Do not change that shared service or other phone numbers.
 
 New voice: POST https://charleston-ai-alli-gpt-live.onrender.com/inbound/voice
 Voice fallback: POST https://tuesday-agent-demo.netlify.app/api/callback
+Voice status: POST https://charleston-ai-alli-gpt-live.onrender.com/inbound/voice-status
+Original voice status: POST https://api.vapi.ai/twilio/status
 New SMS: POST https://charleston-ai-alli-gpt-live.onrender.com/inbound/sms
 No SMS fallback to Vapi: mixing agents after an uncertain delivery can duplicate
 or contradict actions. Twilio retries are deduplicated by MessageSid.

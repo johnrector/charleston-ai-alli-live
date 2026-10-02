@@ -114,8 +114,8 @@ def finish(sid,status,reply=None,delivery_sid=None,transcript=None):
             transcript=COALESCE(%s,transcript),updated_at=now() WHERE sid=%s RETURNING phone,channel,report,body,reply''',
             (status,status,reply,delivery_sid,Jsonb(transcript) if transcript is not None else None,sid)).fetchone()
         if row and status not in ('sending','active'):
-            notify(db,sid+':'+status,dict(sid=sid,phone=row[0],channel=row[1],status=status,
-                report=row[2],received_text=row[3],reply=row[4],follow_up_needed=status in ('failed','uncertain','fallback') or (row[1]=='voice' and not row[2]),
+            notify(db,sid+':'+('transcript' if transcript is not None else status),dict(sid=sid,phone=row[0],channel=row[1],status=status,
+                report=row[2],received_text=row[3],reply=row[4],transcript=transcript,follow_up_needed=status in ('failed','uncertain','fallback') or (row[1]=='voice' and not row[2]),
                 summary='Inbound interaction '+status))
 
 def delivery(sid, message_sid, status):

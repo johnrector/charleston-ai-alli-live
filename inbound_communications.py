@@ -266,6 +266,13 @@ class InboundCommunications:
                 with contextlib.suppress(asyncio.CancelledError):await watchdog
                 self.channels.pop(token,None)
                 with contextlib.suppress(Exception):await adapter.close()
+        @app.post('/inbound/voice-status',dependencies=[Depends(http_sig)])
+        async def voice_status(request:Request):
+            form=await request.form();sid,_=self.validate(form,'voice')
+            row=await asyncio.to_thread(self.store.get,sid)
+            if row and row['status']=='active' and form.get('CallStatus') in ('completed','failed','busy','no-answer','canceled'):
+                await asyncio.to_thread(self.store.finish,sid,str(form['CallStatus']))
+            return Response('<Response/>',media_type='text/xml')
         @app.post('/inbound/sms',dependencies=[Depends(http_sig)])
         async def sms(request:Request):
             form=await request.form();sid,phone=self.validate(form,'sms')
