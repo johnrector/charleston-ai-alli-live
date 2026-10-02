@@ -54,6 +54,7 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
         verified['value']=True
         if channel=='sms':await asyncio.to_thread(repository.identity,phone,body.request_id,True)
         return {'ok':True,'recipient_name':body.recipient_name,'mission':body.mission,
+                'mission_context':body.model_dump(mode='json'),
                 'previous_outcome':context.get('previous_outcome'),'history':context.get('history',[])}
     @function_tool()
     async def report_call_outcome(summary: str, follow_up_needed: bool=True) -> dict:
@@ -69,6 +70,8 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
             async def run(**kwargs):
                 if not verified['value']:return {'ok':False,'error':'Confirm identity before using calendar or email tools'}
                 result=await original(**kwargs)
+                if original.name in ('create_meeting','update_meeting','cancel_meeting','send_email'):
+                    await asyncio.to_thread(repository.action_result,sid,original.name,result)
                 return result
             return create_tool(original.name,original.description,original.params_json_schema,run)
         registry.append(guard(tool))

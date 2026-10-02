@@ -115,7 +115,7 @@ def finish(sid,status,reply=None,delivery_sid=None,transcript=None):
             (status,status,reply,delivery_sid,Jsonb(transcript) if transcript is not None else None,sid)).fetchone()
         if row and status not in ('sending','active'):
             notify(db,sid+':'+status,dict(sid=sid,phone=row[0],channel=row[1],status=status,
-                report=row[2],received_text=row[3],reply=row[4],follow_up_needed=status in ('failed','uncertain','fallback') or not row[2],
+                report=row[2],received_text=row[3],reply=row[4],follow_up_needed=status in ('failed','uncertain','fallback') or (row[1]=='voice' and not row[2]),
                 summary='Inbound interaction '+status))
 
 def delivery(sid, message_sid, status):
@@ -126,3 +126,16 @@ def delivery(sid, message_sid, status):
         if row and status in ('undelivered','failed'):
             notify(db,sid+':delivery',dict(sid=sid,phone=row[0],channel='sms',status=status,follow_up_needed=True,
                 summary='The SMS reply could not be delivered.'))
+
+
+def action_result(sid, action, result):
+    """Preserve actual business-tool receipts separately from model summaries."""
+    import hashlib
+    initialize()
+    value=json.dumps(result,sort_keys=True,default=str)
+    with connection() as db:
+        row=db.execute('SELECT phone,channel FROM alli_inbound WHERE sid=%s',(sid,)).fetchone()
+        if row:
+            notify(db,sid+':action:'+hashlib.sha256((action+value).encode()).hexdigest(),
+                dict(sid=sid,phone=row[0],channel=row[1],source='business_tool_result',
+                     action=action,result=result,follow_up_needed=result.get('ok') is not True))

@@ -52,6 +52,9 @@ SESSION_CONFIG = {
     },
 }
 
+# OAuth tokeninfo URLs contain credentials; never log HTTP client request URLs.
+logging.getLogger('httpx').setLevel(logging.WARNING)
+logging.getLogger('httpcore').setLevel(logging.WARNING)
 app = FastAPI()
 app.include_router(google_router)
 
