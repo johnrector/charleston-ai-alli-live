@@ -42,7 +42,9 @@ def profile(context, sid, phone):
     return OutboundCall(request_id='inbound-'+sid,phone=phone,recipient_name='Unverified caller',
         mission='Take a message for John; no calendar or email actions are authorized.',capabilities=[])
 
-async def build_session(base, context, sid, phone, channel, repository=store, end=None):
+async def build_session(base, context, sid, phone, channel, repository=store, end=None, owner_text=""):
+    from owner_sms import is_owner_sms, calendar_tool, email_tools, INSTRUCTIONS as OWNER_SMS_RULES
+    owner_sms=is_owner_sms(phone,channel)
     body=profile(context,sid,phone)
     contact=context.get('contact') or {}
     recognized=contact.get('name') or (body.recipient_name if context.get('mission') else '')
@@ -80,6 +82,11 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
         saved=await asyncio.to_thread(repository.remember_name,phone,name)
         return {'ok':saved,'greeting_only':True}
     registry=[confirm_identity,remember_contact_name,report_call_outcome]
+    if owner_sms:
+        registry.append(calendar_tool(phone,channel))
+        async def email_receipt(result):
+            await asyncio.to_thread(repository.action_result,sid,'send_email',result)
+        registry.extend(email_tools(phone,channel,owner_text,email_receipt))
     for tool in tools_for(body,report_call_outcome):
         if tool.name=='report_call_outcome':continue
         def guard(original):
@@ -95,7 +102,7 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
     session=session_for(body,base,report_call_outcome,executable_tools=registry)
     # Replace outbound-specific opening/voicemail rules, keep bounded action workflow.
     from call_actions import ACTION_INSTRUCTIONS
-    session['instructions']=RULES+'\nOPENING: '+opening+'\nRemember an explicitly introduced name with remember_contact_name. The recognized contact is a greeting hint only. Owner greetings do not grant new tools.\n'+(ACTION_INSTRUCTIONS if known else '')+'\nCHANNEL: '+channel+'\n'+json.dumps({
+    session['instructions']=(OWNER_SMS_RULES if owner_sms else RULES)+'\nOPENING: '+opening+'\nRemember an explicitly introduced name with remember_contact_name. The recognized contact is a greeting hint only. Owner greetings do not grant new tools.\n'+(ACTION_INSTRUCTIONS if known else '')+'\nCHANNEL: '+channel+'\n'+json.dumps({
         'current_eastern_datetime':datetime.now(ZoneInfo('America/New_York')).isoformat(),
         'identity_confirmed':verified['value'],'known_returning_number':known,'recognized_contact':contact,
         'recipient_name_for_verification_only':body.recipient_name if known else None,
@@ -147,7 +154,7 @@ class InboundCommunications:
     async def sms_answer(self,row,client=None):
         from openai import AsyncOpenAI
         context=await asyncio.to_thread(self.store.context_for,row['phone'])
-        session,registry=await build_session(self.base,context,row['sid'],row['phone'],'sms',self.store)
+        session,registry=await build_session(self.base,context,row['sid'],row['phone'],'sms',self.store,owner_text='\n'.join([str(h.get('body','')) for h in context.get('history',[]) if h.get('channel')=='sms']+[row['body']]))
         by_name={t.name:t for t in registry}
         messages=[{'role':'user','content':row['body']}]
         api=client or AsyncOpenAI(timeout=45,max_retries=0)

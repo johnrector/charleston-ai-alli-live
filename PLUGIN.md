@@ -159,3 +159,25 @@ create a mailbox, or change sender authentication. A separate address is optiona
 branding, not a technical dependency. The completion report goes to John; other
 recipients require their own task authorization. This workflow grants no new
 calling, rescheduling, cancellation, or attendee-email authority.
+
+## Owner SMS capabilities — October 2, 2026
+
+Twilio-signed inbound SMS from the configured ALLI_OWNER_PHONE can now read the
+primary calendar and send owner-requested emails using the existing Responses
+reasoning model and Google email implementation. Caller-name claims and voice
+caller ID do not enable these owner SMS tools. Public callback permissions and
+GPT-Live voice/delegation are unchanged.
+
+Calendar lookup defaults to today through 14 days ahead and supports bounded
+windows up to 31 days. Match appointment titles, participants and organizer names.
+Email recipients resolve from nearby calendar participants or previous authorized
+call contacts; this is not a complete address book. An explicit address from the
+owner or one unambiguous lookup is required. Unknown/ambiguous names require a
+question. A complete explicit send instruction is sufficient; do not ask for
+redundant approval. Saved action receipts and existing durable send deduplication
+prevent blind retries after uncertainty. The service cannot read the inbox.
+
+SMS remains separate from the cloud dot: no Shopify/Maps tools, outbound dialing,
+or arbitrary dot task handoff have been added. Owner phone matching authorizes
+these bounded SMS conveniences, not account/security changes. Reassigning the
+owner number requires updating ALLI_OWNER_PHONE.
