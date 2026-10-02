@@ -85,3 +85,31 @@ Update the private cloud plugin's description with the text above, refresh its
 MCP tools, and verify call_outbound/get_call_result in the dot's cloud context.
 Use a saved call result for the connectivity test. Real call behavior requires
 a separately authorized recipient and mission; local tests do not establish it.
+
+## Two-way number — October 2, 2026
+
+The approved number is +1 854 444 7852. Inbound voice uses `/inbound/voice`
+with the same pinned GPT-Live voice and Responses delegation architecture.
+SMS uses `/inbound/sms` and the same reasoning model and mission-scoped tools.
+Recent outbound missions (30 days) and inbound history (7 days) are joined by
+exact phone number. Ask the returning person to independently state their name
+and confirm they are returning the call before disclosing details or using
+calendar/email tools. Unknown or ambiguous callers can leave a message only.
+Phone/name matching is conversational confirmation, not strong authentication;
+never handle sensitive account changes through it.
+
+`list_communication_updates(after_id, limit)` is a read-only, durable feed for
+the cloud dot. Persist `next_cursor` only after processing; fetch additional
+pages until empty. Group updates by interaction SID to avoid duplicate alerts.
+Notify John about meaningful completed changes, questions, delivery failures or
+attention needed. An accepted/submitted SMS is not proof of delivery. Reports
+are model-reported; action IDs and successful tool responses provide stronger
+completion evidence. Never automatically redial/resend uncertain interactions.
+
+Voice webhook failure uses the existing Netlify callback route, which forwards
+to +1 843 327 6008. A disconnected media stream also returns to that fallback.
+A 15-second no-audio watchdog closes a silent stream to trigger fallback.
+The service is one always-on Render process; transport sessions are in-memory,
+while missions, SMS work, transcripts and owner updates are in Postgres.
+Uncertain work is surfaced for review after a worker interruption and is never
+blindly retried. The cloud dot's monitoring schedule is configured separately.

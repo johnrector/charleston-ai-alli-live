@@ -128,3 +128,27 @@ caller-provided context cannot expand the authorization. Durable deduplication
 still permits at most one dial. Expired or mismatched grants do not authorize
 calls. Owner-test behavior and automatic calling remain unchanged. Remove the
 grant after the requested call and result readback are complete.
+
+## Two-way inbound cutover and rollback
+
+Number SID: PN649ae076a3825c5c0b1e2387401866b7 (+18544447852).
+Original voice: POST https://tuesday-agent-demo.netlify.app/api/callback
+Original SMS: POST https://api.vapi.ai/twilio/sms
+Messaging service MG528d0ca817e3c269393cf9a8a74b7cd8 defers to sender webhook.
+Do not change that shared service or other phone numbers.
+
+New voice: POST https://charleston-ai-alli-gpt-live.onrender.com/inbound/voice
+Voice fallback: POST https://tuesday-agent-demo.netlify.app/api/callback
+New SMS: POST https://charleston-ai-alli-gpt-live.onrender.com/inbound/sms
+No SMS fallback to Vapi: mixing agents after an uncertain delivery can duplicate
+or contradict actions. Twilio retries are deduplicated by MessageSid.
+Keep Vapi's old number/assistant record intact for rollback; do not save it after
+cutover because Vapi may overwrite the Twilio webhooks.
+
+Before cutover verify `/health`: exact deployed commit, inbound_worker_ready=true,
+inbound_model_checks voice=true/text=true. Startup probes open a GPT-Live session
+and obtain a short Responses reply without making calls or invoking business tools.
+Signature tests use fixtures; live readiness is not a real phone/audio or SMS
+end-to-end test. Perform owner-initiated call and text smoke tests after cutover;
+check conversation, delivery and update-feed outcomes before claiming end-to-end
+verification. Restore the original number-specific webhook URLs to roll back.

@@ -88,6 +88,9 @@ async def health():
     return {"ok": True, "voice_model": "gpt-live-1", "reasoning_model": "gpt-5.6-sol",
             "build_commit": os.getenv("RENDER_GIT_COMMIT", "local"),
             "outbound_api": "manual-actions-v2",
+            "inbound_api": "two-way-v1",
+            "inbound_worker_ready": inbound_communications.ready,
+            "inbound_model_checks": inbound_communications.probes,
             "manual_actions_enabled": os.getenv("MANUAL_CALL_ACTIONS_ENABLED", "").lower() == "true",
             "automatic_calls_enabled": os.getenv("APPOINTMENT_AUTOMATION_ENABLED", "").lower() == "true"}
 
@@ -130,18 +133,29 @@ voice_channel = VoiceChannel(
     ),
 )
 
+from inbound_communications import InboundCommunications
+inbound_communications = InboundCommunications(tac, SESSION_CONFIG)
+inbound_communications.install(app)
+
 from mcp_integration import install_mcp
 from outbound_profiles import OutboundCall
 from appointment_voice import OutboundVoice
 outbound_voice = OutboundVoice(tac, SESSION_CONFIG, read_provider=True)
 outbound_voice.install(app, OutboundCall)
+async def capture_conversation_end(session):
+    try:
+        await outbound_voice.conversation_ended(session)
+    finally:
+        await inbound_communications.ended(session)
+tac.on_conversation_ended(capture_conversation_end)
 from appointment_automation import AppointmentAutomation
 appointment_automation = AppointmentAutomation(outbound_voice)
 appointment_automation.install(app)
 mcp = install_mcp(app, initiate_demo_call, DemoCall,
                   initiate_outbound=outbound_voice.initiate,
                   outbound_model=OutboundCall,
-                  read_outcome=outbound_voice.read_result)
+                  read_outcome=outbound_voice.read_result,
+                  read_updates=inbound_communications.store.updates)
 
 if __name__ == "__main__":
     server = TACFastAPIServer(tac=tac, voice_channel=voice_channel, app=app)

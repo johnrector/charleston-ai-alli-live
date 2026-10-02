@@ -107,7 +107,7 @@ def normalize_phone(phone):
         raise ValueError('A usable phone number is required') from exc
 
 
-def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_model=None, read_outcome=None):
+def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_model=None, read_outcome=None, read_updates=None):
     """Keep the compatible tool signature; optionally use general calls for it.
 
     initiate_outbound must durably deduplicate the complete validated body by
@@ -236,6 +236,15 @@ def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_m
                 return await read_outcome(request_id)
             result = await anyio.to_thread.run_sync(read_outcome, request_id)
             return await result if inspect.isawaitable(result) else result
+
+    if read_updates is not None:
+        @mcp.tool(title='Read inbound communication updates',
+            description="Read new callback/SMS outcomes, questions and delivery failures for John. This never calls, texts or changes calendars. Persist next_cursor after processing; after_id=0 starts at the beginning. Report conversation summaries as reported and tool actions only when verified. No automatic redial or resend.",
+            annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+            meta={'securitySchemes': SCHEMES})
+        async def list_communication_updates(after_id: Annotated[int, Field(ge=0)] = 0,
+                                             limit: Annotated[int, Field(ge=1,le=100)] = 30) -> dict:
+            return await anyio.to_thread.run_sync(read_updates, after_id, limit)
 
     mcp_app = mcp.streamable_http_app()
     # The SDK handles client auth, code/redirect matching, S256 and refresh checks.
