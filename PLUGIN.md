@@ -181,3 +181,17 @@ SMS remains separate from the cloud dot: no Shopify/Maps tools, outbound dialing
 or arbitrary dot task handoff have been added. Owner phone matching authorizes
 these bounded SMS conveniences, not account/security changes. Reassigning the
 owner number requires updating ALLI_OWNER_PHONE.
+
+## Outbound voicemail ringing window — October 3, 2026
+
+Allow up to 60 seconds of ringing before declaring no answer (previously 25).
+The October 2 Michelle and Brooks attempts both ended with provider no-answer,
+zero connected duration, and no voicemail detection. The shorter window may
+have ended the attempts before carrier voicemail answered; this is not proof
+that either recipient had an available mailbox.
+
+Keep asynchronous DetectMessageEnd for generic voicemail, wait for greeting
+completion, and retain the existing single-submission guard. Longer ringing
+does not guarantee voicemail delivery or authorize an automatic retry. Report
+no-answer separately from voicemail submitted or delivery uncertain. The
+GPT-Live voice and delegated calendar/email architecture are unchanged.

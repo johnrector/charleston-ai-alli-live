@@ -71,6 +71,8 @@ def test_isolated_channel_claim_and_outcome(service,monkeypatch):
         assert channel._provider.config.default_session_config is None
         assert set(channel._provider._tools_by_name)=={'report_call_outcome','end_call'}
         assert options.call_options.machine_detection=='DetectMessageEnd'
+        assert options.call_options.timeout==60
+        assert options.call_options.async_amd is True
         assert options.call_options.time_limit==900
         # Even a malicious model request cannot execute a demo action.
         denied=await channel._provider._run_tool_call('test','send_email','{}')

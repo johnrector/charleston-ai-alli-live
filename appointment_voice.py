@@ -155,7 +155,8 @@ class OutboundVoice:
                 call_options=CallOptions(machine_detection=('DetectMessageEnd' if body.voicemail_policy == 'generic_message' else 'Enable'), async_amd=True,
                     async_amd_status_callback=f'https://{domain}/outbound/amd/{token}',
                     status_callback=f'https://{domain}/outbound/status/{token}',
-                    status_callback_event=['completed'], timeout=25, time_limit=900)))
+                    # Give carrier voicemail time to answer before ending an unanswered call.
+                    status_callback_event=['completed'], timeout=60, time_limit=900)))
             call_sid_ref['value'] = result.call_sid
             if not await asyncio.to_thread(self.store.queued, key, result.call_sid):
                 raise RuntimeError('Call accepted but durable SID binding could not be verified; do not retry')
