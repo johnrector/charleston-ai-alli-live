@@ -34,6 +34,8 @@ def initialize():
             db.execute("ALTER TABLE alli_contact_name ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT ''")
             from contact_approvals import initialize as initialize_approvals
             initialize_approvals(db)
+            from scheduled_sms import initialize as initialize_sms
+            initialize_sms(db)
             # Preserve owner-supplied contacts independently of mission expiry. Shared
             # numbers with conflicting names are deliberately not auto-approved.
             db.execute(r"""INSERT INTO alli_contact_name(phone,name,source,email)
@@ -105,8 +107,14 @@ def context_for(phone):
         elif len(names)>1:contact=None
         elif greeting_rows and len(names)==1:
             contact=(greeting_rows[0][0]['recipient_name'],'owner_supplied_mission',greeting_rows[0][0].get('email',''))
-        history = db.execute("""SELECT channel,body,reply,report,transcript FROM alli_inbound
-            WHERE phone=%s AND created_at>now()-interval '7 days' ORDER BY created_at DESC LIMIT 12""", (phone,)).fetchall()
+        history = db.execute("""SELECT channel,body,reply,report,transcript FROM (
+            SELECT channel,body,reply,report,transcript,created_at FROM alli_inbound
+                WHERE phone=%s AND created_at>now()-interval '7 days'
+            UNION ALL
+            SELECT 'sms','',body,NULL::jsonb,NULL::jsonb,send_at FROM alli_outbound_sms
+                WHERE phone=%s AND send_at>now()-interval '7 days'
+                AND status IN ('submitted','queued','sent','delivered')
+            ) recent ORDER BY created_at DESC LIMIT 12""", (phone,phone)).fetchall()
     return {'mission':matched, 'previous_outcome': rows[0][1] if matched else None,
             'contact':dict(name=contact[0],source=contact[1],is_owner=owner,
                 email=contact[2] if len(contact)>2 else '') if contact else None,

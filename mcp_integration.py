@@ -84,6 +84,12 @@ OUTBOUND_INSTRUCTIONS = (
     'to read progress and reported outcomes. A conversation_report is a report of the conversation, '
     'not independent proof of calendar booking or invitation delivery. Do not automatically retry '
     'uncertain results. Respect host permissions and never invent phone numbers, facts, or approval. '
+    'For an owner-authorized SMS use send_text_message with a verified recipient, exact approved message, '
+    'and stable request_id. Omit send_at for now or supply an ISO datetime with UTC offset for a scheduled text. '
+    'The cloud outbox persists across Mac shutdowns and service restarts. Scheduled means saved, not sent. '
+    'Use get_text_message to check status and cancel_text_message only for unsent scheduled texts. '
+    'Never automatically retry an uncertain text or change request IDs to bypass duplicate prevention. '
+    'Texts expire if the cloud cannot attempt them within 15 minutes of their scheduled time. '
     'These tools do not enable automatic future calls.'
 )
 
@@ -125,7 +131,7 @@ def normalize_phone(phone):
         raise ValueError('A usable phone number is required') from exc
 
 
-def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_model=None, read_outcome=None, read_updates=None):
+def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_model=None, read_outcome=None, read_updates=None, sms_service=None):
     """Keep the compatible tool signature; optionally use general calls for it.
 
     initiate_outbound must durably deduplicate the complete validated body by
@@ -263,6 +269,37 @@ def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_m
         async def list_communication_updates(after_id: Annotated[int, Field(ge=0)] = 0,
                                              limit: Annotated[int, Field(ge=1,le=100)] = 30) -> dict:
             return await anyio.to_thread.run_sync(read_updates, after_id, limit)
+
+    if sms_service is not None:
+        from scheduled_sms import TextMessage, enqueue, get as get_sms, cancel as cancel_sms
+
+        @mcp.tool(title='Send or schedule a text from Alli',
+            description="Send an owner-authorized SMS from Alli's existing number, now or at a specified time. Requires John's explicit recipient and message authorization. Supply a stable request_id; identical repeats return the existing state and different content under the same ID is rejected. send_at must include a UTC offset; use America/New_York to resolve John's local time. The cloud queue works with John's Mac off. A scheduled status is not proof of sending or delivery. Texts expire 15 minutes after their due time if not attempted. Never retry an uncertain send under another ID.",
+            annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True),
+            meta={'securitySchemes': SCHEMES})
+        async def send_text_message(
+            request_id: Annotated[str, Field(min_length=1, max_length=128, pattern=r'^[A-Za-z0-9][A-Za-z0-9_.:-]*$')],
+            phone: Annotated[str, Field(min_length=7, max_length=30, description='Verified recipient phone; US 10 digits or E.164')],
+            recipient_name: Annotated[str, Field(min_length=1, max_length=200)],
+            message: Annotated[str, Field(min_length=1, max_length=1600, description='The exact owner-approved text')],
+            send_at: AwareDatetime | None = None,
+        ) -> dict:
+            body = TextMessage(request_id=request_id, phone=phone, recipient_name=recipient_name, message=message, send_at=send_at)
+            return await anyio.to_thread.run_sync(enqueue, body)
+
+        @mcp.tool(title='Read an outgoing text status',
+            description='Read a text request saved in Alli cloud storage, including its approved content, send time, provider SID and delivery state. Never sends or retries. Only delivered confirms delivery.',
+            annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+            meta={'securitySchemes': SCHEMES})
+        async def get_text_message(request_id: str) -> dict:
+            return await anyio.to_thread.run_sync(get_sms, request_id)
+
+        @mcp.tool(title='Cancel an unsent scheduled text',
+            description='Cancel an owner-authorized outgoing text only while it is still scheduled and has not been claimed for sending. Sending, sent and uncertain texts cannot be recalled. Use the existing request_id.',
+            annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
+            meta={'securitySchemes': SCHEMES})
+        async def cancel_text_message(request_id: str) -> dict:
+            return await anyio.to_thread.run_sync(cancel_sms, request_id)
 
     mcp_app = mcp.streamable_http_app()
     # The SDK handles client auth, code/redirect matching, S256 and refresh checks.

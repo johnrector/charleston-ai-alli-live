@@ -164,11 +164,11 @@ async def consent(request: Request):
     csrf = secrets.token_urlsafe(32)
     page = '''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect Alli to ChatGPT</title></head>
 <body style="font:18px system-ui;max-width:540px;margin:60px auto;padding:24px"><h1>Connect Alli to ChatGPT</h1>
-<p>Allow your private ChatGPT connection to place outbound calls as Alli, using the contact and mission you supply.</p>
-<p>This grants <strong>calls:write</strong> only. Calendar and Gmail remain inside your existing phone assistant.</p>
+<p>Allow your private ChatGPT connection to place outbound calls and send or schedule SMS as Alli, using the recipients, missions and messages you authorize.</p>
+<p>This uses the existing owner-only <strong>calls:write</strong> communications permission. Calendar and Gmail remain inside your existing phone assistant.</p>
 <form method="post"><input type="hidden" name="request" value="%s"><input type="hidden" name="csrf" value="%s">
 <label for="owner_key">Demo administrator key</label><br><input id="owner_key" type="password" name="owner_key" required autocomplete="off" style="width:100%%;padding:10px;margin:12px 0">
-<p>The key stays on this service. It is never sent to ChatGPT.</p><button type="submit" style="padding:12px">Authorize ChatGPT calling</button></form></body></html>''' % (html.escape(nonce, quote=True), csrf)
+<p>The key stays on this service. It is never sent to ChatGPT.</p><button type="submit" style="padding:12px">Authorize ChatGPT communications</button></form></body></html>''' % (html.escape(nonce, quote=True), csrf)
     response = HTMLResponse(page, headers=SAFE_HEADERS)
     response.set_cookie('__Host-alli-link', csrf, secure=True, httponly=True, samesite='strict', max_age=600, path='/')
     return response

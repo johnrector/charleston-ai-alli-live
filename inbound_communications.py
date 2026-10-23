@@ -108,6 +108,8 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
         async def email_receipt(result):
             await asyncio.to_thread(repository.action_result,sid,'send_email',result)
         registry.extend(email_tools(phone,channel,owner_text,email_receipt))
+        from owner_sms import text_tools
+        registry.extend(text_tools(phone,channel,sid,owner_text))
     if contact_assistance or owner_sms:
         async def reminder_receipt(action,result):
             await asyncio.to_thread(repository.action_result,sid,action,result)

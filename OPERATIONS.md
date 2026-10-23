@@ -205,3 +205,30 @@ use `/inbound/approval-status/{code}` and require the Twilio signature, account,
 stored destination and matching message SID. A process interruption or send timeout
 leaves an uncertain state for review, never an automatic duplicate send. The new
 schema is additive and compatible with rollback to the prior application version.
+
+
+## Cloud outbound SMS (October 23, 2026)
+
+The authenticated MCP tools `send_text_message`, `get_text_message` and
+`cancel_text_message` share a durable Postgres outbox with owner SMS tools.
+An owner can text Alli to find a saved contact and send/schedule a message.
+Unknown contacts and friends never receive these owner tools. Sending a text
+does not add a contact to the pre-approved list.
+
+`send_at` is an ISO datetime with a UTC offset; omitted means now. Resolve
+John's local dates using America/New_York. An accepted schedule is not sent or
+delivered. The cloud worker is independent of Mac availability and OpenAI
+model health. It checks every two seconds and claims in a committed transaction
+before contacting Twilio. Same request ID and payload return the original
+state; changed payload under that ID fails. Interrupted or uncertain sends
+never requeue automatically. A schedule expires after 15 minutes if not claimed;
+Twilio queue validity is also 15 minutes.
+
+The existing owner admin key protects POST `/outbound/sms`, GET
+`/outbound/sms/{request_id}`, and POST `/outbound/sms/{request_id}/cancel`.
+No new credentials or sending account are required. Requests use Alli's
+existing sender and Twilio API-key client. Signed status callbacks verify the
+account, sender, recipient, per-request random token and message SID; late
+queued/sent callbacks cannot replace a terminal delivery status. Outgoing
+texts enter the shared conversation history, so replies retain their context.
+Only still-scheduled messages can be cancelled.

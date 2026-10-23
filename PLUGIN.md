@@ -308,3 +308,17 @@ Notifications persist a sending state before dispatch, track signed delivery
 callbacks, and never blindly retry uncertain sends. Failures are recorded in the
 owner communication feed. Approval is not a booking and does not send an extra
 message to the new contact or change a calendar event.
+
+
+## Owner-authorized texts and schedules
+
+Use `send_text_message` for John's authorized SMS, with verified recipient,
+exact message and stable request_id. `send_at` includes its UTC offset; omit
+for immediate dispatch. Schedules persist in Alli's Render Postgres and run
+with the Mac off. Read `get_text_message` before reporting outcomes or
+retrying; scheduled/queued is not delivered. Cancel an unsent schedule with
+`cancel_text_message`. Never change IDs to bypass an uncertain attempt.
+John can also ask for these actions directly by SMS to Alli; named recipients
+are resolved from the existing trusted directory and ambiguous numbers require
+clarification. A new outgoing text does not authorize its recipient to access
+John's calendar.

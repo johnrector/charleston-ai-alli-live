@@ -96,6 +96,8 @@ async def health():
             "inbound_api": "two-way-v1",
             "contact_policy": "saved-contact-v1",
             "contact_approval_api": "owner-sms-v1",
+            "outbound_sms_api": "scheduled-sms-v1",
+            "outbound_sms_worker_ready": scheduled_sms.ready,
             "inbound_worker_ready": inbound_communications.ready,
             "inbound_model_checks": inbound_communications.probes,
             "manual_actions_enabled": os.getenv("MANUAL_CALL_ACTIONS_ENABLED", "").lower() == "true",
@@ -143,6 +145,9 @@ voice_channel = VoiceChannel(
 from inbound_communications import InboundCommunications
 inbound_communications = InboundCommunications(tac, SESSION_CONFIG)
 inbound_communications.install(app)
+from scheduled_sms import ScheduledSMS
+scheduled_sms = ScheduledSMS(inbound_communications)
+scheduled_sms.install(app)
 
 from mcp_integration import install_mcp
 from outbound_profiles import OutboundCall
@@ -162,7 +167,8 @@ mcp = install_mcp(app, initiate_demo_call, DemoCall,
                   initiate_outbound=outbound_voice.initiate,
                   outbound_model=OutboundCall,
                   read_outcome=outbound_voice.read_result,
-                  read_updates=inbound_communications.store.updates)
+                  read_updates=inbound_communications.store.updates,
+                  sms_service=scheduled_sms)
 
 if __name__ == "__main__":
     server = TACFastAPIServer(tac=tac, voice_channel=voice_channel, app=app)
