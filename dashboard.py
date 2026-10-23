@@ -141,7 +141,8 @@ def data():
             outbound.append(promises.serial(row))
     from appointment_reminders import settings
     from google_integration import CONNECTION_STATUS
-    return dict(ok=True,checked_at=datetime.now(timezone.utc).isoformat(),timezone='America/New_York',
+    from reasoning_config import MODEL,EFFORT
+    return dict(ok=True,checked_at=datetime.now(timezone.utc).isoformat(),timezone='America/New_York',reasoning=dict(model=MODEL,effort=EFFORT),
         promises=promises.listing(include_closed=True),people=people,approvals=approvals,attention=attention,activity=activity,
         messages=outbound,reminder_policy=settings(),google_connection=dict(CONNECTION_STATUS))
 
