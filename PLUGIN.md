@@ -322,3 +322,16 @@ John can also ask for these actions directly by SMS to Alli; named recipients
 are resolved from the existing trusted directory and ambiguous numbers require
 clarification. A new outgoing text does not authorize its recipient to access
 John's calendar.
+
+
+## Appointment-driven assistance
+
+When the owner enables proactive reminders, Alli checks the live calendar in
+the cloud, matches approved contacts by unique saved invitation email, sends
+one timely reminder, and offers help with directions/questions. Use
+`preview_appointment_reminders` for a read-only preview and
+`configure_appointment_reminders` for an explicit owner enable/disable request.
+Default is two hours before a confirmed meeting, with 8 PM–8 AM Eastern quiet
+hours, recipient opt-outs, fresh calendar checks and durable deduplication.
+Do not claim every saved phone can match automatically: contacts need a saved
+invitation email. This does not activate automatic calls.

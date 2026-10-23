@@ -175,7 +175,7 @@ def test_owner_and_known_contact_greetings_keep_permissions_bounded(channel,monk
         session,tools=await inbound.build_session(BASE,owner,SID,CALLER,channel,Memory())
         assert "OPENING: Hi John, it's Alli. What can I help you with?" in session['instructions']
         expected={'confirm_identity','remember_contact_name','report_call_outcome'}
-        if channel=='sms':expected.update({'lookup_my_calendar','find_email_recipient','send_email','save_friend_contact','create_reminder_for_john','find_text_contact','text_contact','get_text_status','cancel_scheduled_text'})
+        if channel=='sms':expected.update({'lookup_my_calendar','find_email_recipient','send_email','save_friend_contact','create_reminder_for_john','find_text_contact','text_contact','get_text_status','cancel_scheduled_text','appointment_reminder_policy','set_appointment_reminders'})
         assert {t.name for t in tools}==expected
         assert session['model']==BASE['model']
         assert session['delegation']['responses']['model']==BASE['delegation']['responses']['model']

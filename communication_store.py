@@ -36,6 +36,8 @@ def initialize():
             initialize_approvals(db)
             from scheduled_sms import initialize as initialize_sms
             initialize_sms(db)
+            from appointment_reminders import initialize as initialize_reminders
+            initialize_reminders(db)
             # Preserve owner-supplied contacts independently of mission expiry. Shared
             # numbers with conflicting names are deliberately not auto-approved.
             db.execute(r"""INSERT INTO alli_contact_name(phone,name,source,email)

@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from fastapi import Depends, Header, HTTPException, Request
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from psycopg.types.json import Jsonb
 from tac.server.signature_validation import build_http_signature_dependency
 import communication_store as store
 
@@ -59,6 +60,7 @@ def initialize(db):
         created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now())''')
     db.execute("CREATE INDEX IF NOT EXISTS alli_outbound_sms_due ON alli_outbound_sms(send_at) WHERE status='scheduled'")
     db.execute('CREATE INDEX IF NOT EXISTS alli_outbound_sms_phone ON alli_outbound_sms(phone,created_at DESC)')
+    db.execute("ALTER TABLE alli_outbound_sms ADD COLUMN IF NOT EXISTS context jsonb NOT NULL DEFAULT '{}'::jsonb")
 
 
 def row_dict(row):
@@ -81,10 +83,11 @@ def get(request_id):
     return row_dict(row) or {'ok': False, 'request_id': request_id, 'status': 'not_found'}
 
 
-def enqueue(body: TextMessage):
+def enqueue(body: TextMessage, *, context=None):
     store.initialize()
     value = body.model_dump(mode='json')
     if body.send_at: value['send_at'] = body.send_at.astimezone(timezone.utc).isoformat()
+    if context: value['context'] = context
     fingerprint = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
     with store.connection() as db:
         # Serialize same-ID intent checks, including concurrent enqueue/cancel.
@@ -98,10 +101,10 @@ def enqueue(body: TextMessage):
         if when < now - timedelta(seconds=60): raise ValueError('Choose a future send time with an explicit UTC offset')
         if when > now + timedelta(days=366): raise ValueError('Schedule texts at most one year ahead')
         row = db.execute(f'''INSERT INTO alli_outbound_sms
-            (request_id,fingerprint,phone,recipient_name,body,send_at,expires_at,callback_token)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING {FIELDS}''',
+            (request_id,fingerprint,phone,recipient_name,body,send_at,expires_at,callback_token,context)
+            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING {FIELDS}''',
             (body.request_id, fingerprint, body.phone, body.recipient_name, body.message,
-             when, when + timedelta(minutes=15), secrets.token_urlsafe(24))).fetchone()
+             when, when + timedelta(minutes=15), secrets.token_urlsafe(24), Jsonb(context or {}))).fetchone()
         store.notify(db, 'outbound-sms:' + body.request_id + ':scheduled',
                      dict(channel='sms', direction='outbound', request_id=body.request_id,
                           phone=body.phone, status='scheduled', send_at=when.isoformat(),
@@ -141,20 +144,20 @@ def claim():
                 AND send_at<=now() AND expires_at>=now()
             ORDER BY send_at FOR UPDATE SKIP LOCKED LIMIT 1)
             UPDATE alli_outbound_sms s SET status='sending',updated_at=now() FROM due
-            WHERE s.request_id=due.request_id RETURNING s.request_id,s.phone,s.body,s.callback_token''').fetchone()
-    return dict(zip(('request_id', 'phone', 'body', 'callback_token'), row)) if row else None
+            WHERE s.request_id=due.request_id RETURNING s.request_id,s.phone,s.body,s.callback_token,s.context''').fetchone()
+    return dict(zip(('request_id', 'phone', 'body', 'callback_token', 'context'), row)) if row else None
 
 
 def receipt(request_id, message_sid=None, status='submitted', error_code=None, callback_token=None, phone=None):
     store.initialize()
-    if status not in PROVIDER | {'submitted', 'uncertain'}: return False
+    if status not in PROVIDER | {'submitted', 'uncertain', 'cancelled'}: return False
     with store.connection() as db:
         row = db.execute('SELECT status,message_sid,callback_token,phone FROM alli_outbound_sms WHERE request_id=%s FOR UPDATE', (request_id,)).fetchone()
         if not row or row[0] in {'scheduled', 'cancelled', 'expired'}: return False
         current, prior_sid, token, destination = row
         if callback_token is not None and (not hmac.compare_digest(token, callback_token) or phone != destination): return False
         if prior_sid and prior_sid != message_sid: return False
-        if current in TERMINAL or (current != 'uncertain' and RANK.get(status, 0) < RANK.get(current, 0)): return False
+        if current in TERMINAL or (status != 'cancelled' and current != 'uncertain' and RANK.get(status, 0) < RANK.get(current, 0)): return False
         if status == 'uncertain' and current not in {'sending', 'uncertain'}: return False
         # An early authenticated callback may bind the SID before create() returns.
         db.execute('''UPDATE alli_outbound_sms SET status=%s,message_sid=coalesce(message_sid,%s),
@@ -178,6 +181,12 @@ class ScheduledSMS:
         row = await asyncio.to_thread(claim)
         if not row: return False
         try:
+            context = row.get('context') or {}
+            if context.get('kind') == 'appointment_reminder':
+                from appointment_reminders import revalidate
+                if not await asyncio.to_thread(revalidate,context,row['phone']):
+                    await asyncio.to_thread(receipt,row['request_id'],status='cancelled',error_code='event_changed')
+                    return True
             client = self.communications.client()
             callback = f'https://{self.communications.domain}/outbound/sms-status/{quote(row["request_id"], safe="")}/{row["callback_token"]}'
             result = await asyncio.to_thread(client.messages.create,

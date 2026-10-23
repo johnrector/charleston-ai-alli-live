@@ -131,7 +131,7 @@ def normalize_phone(phone):
         raise ValueError('A usable phone number is required') from exc
 
 
-def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_model=None, read_outcome=None, read_updates=None, sms_service=None):
+def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_model=None, read_outcome=None, read_updates=None, sms_service=None, reminder_service=None):
     """Keep the compatible tool signature; optionally use general calls for it.
 
     initiate_outbound must durably deduplicate the complete validated body by
@@ -300,6 +300,21 @@ def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_m
             meta={'securitySchemes': SCHEMES})
         async def cancel_text_message(request_id: str) -> dict:
             return await anyio.to_thread.run_sync(cancel_sms, request_id)
+
+    if reminder_service is not None:
+        @mcp.tool(title='Preview proactive appointment reminders',
+            description="Read Alli's proactive reminder policy and currently due candidates without sending. Reminders match approved contacts by a unique saved invitation email, recheck the live calendar, respect opt-outs and quiet hours, and deduplicate each event/contact. Default is one SMS two hours before a confirmed meeting, shifted to the prior evening for early meetings.",
+            annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+            meta={'securitySchemes': SCHEMES})
+        async def preview_appointment_reminders() -> dict:
+            return await reminder_service.preview()
+
+        @mcp.tool(title='Enable or disable proactive appointment reminders',
+            description="Change the cloud appointment-reminder policy only when John explicitly requests it. Enabling allows one automatic SMS to an approved uniquely matched meeting participant, two hours before each confirmed appointment, with an offer to help with directions/questions. Quiet hours are 8 PM–8 AM Eastern; early meetings get a prior-evening reminder. Does not enable automatic phone calls. Disabling suppresses unsent automatic reminders; manually authorized texts remain scheduled.",
+            annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True),
+            meta={'securitySchemes': SCHEMES})
+        async def configure_appointment_reminders(enabled: bool) -> dict:
+            return await reminder_service.configure(enabled)
 
     mcp_app = mcp.streamable_http_app()
     # The SDK handles client auth, code/redirect matching, S256 and refresh checks.

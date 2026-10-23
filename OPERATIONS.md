@@ -232,3 +232,38 @@ account, sender, recipient, per-request random token and message SID; late
 queued/sent callbacks cannot replace a terminal delivery status. Outgoing
 texts enter the shared conversation history, so replies retain their context.
 Only still-scheduled messages can be cancelled.
+
+
+## Proactive appointment reminders
+
+John authorized appointment-driven assistance on October 23, 2026. The
+`appointment_reminders` policy is stored in Postgres and defaults disabled
+until explicitly enabled by the owner. Authenticated MCP tools
+`preview_appointment_reminders` and `configure_appointment_reminders`, owner
+SMS tools, and the owner-key `/appointment-reminders` GET/POST routes provide
+preview/control. A cloud worker scans every five minutes while enabled.
+
+Default: one SMS two hours before a confirmed timed meeting, for a participant
+whose invitation email identifies exactly one approved saved phone. Contact
+opt-outs, declined invitations, all-day/transparent events, incomplete attendee
+lists, ambiguous numbers and unmatched emails suppress dispatch. The event must
+be John's own event or one he accepted. No phone/name is inferred from an event
+description. Early reminders falling before 8 AM Eastern move to 6 PM the prior
+day; reminders at/after 8 PM move to 7 PM. No retrospective reminder is created
+more than 15 minutes after its due time.
+
+Recipients get the verified meeting time/location and an offer to help with
+questions/directions. Event/contact IDs deduplicate across scans, restarts and
+rescheduling. Immediately before enqueue AND before Twilio submission, the live
+event, participation, contact mapping, opt-out and policy are rechecked.
+Changed/cancelled events cannot send a stale queued reminder. Replies retain
+the outgoing text context; Alli uses existing own-meeting lookup tools and
+records factual confirmations/questions for John. `STOP REMINDERS` and
+`START REMINDERS` update only the sender's preference. General Twilio STOP
+remains enforced by the carrier/provider. A missing saved invitation email
+means the owner needs to add that email before automatic matching can work.
+
+This feature enables proactive SMS only. Existing automatic-call policy and
+switches remain independent. Failed/uncertain sends are not blindly retried or
+converted into unrequested calls. Google scan failures create an actionable
+communication-feed entry at most once per Eastern day.

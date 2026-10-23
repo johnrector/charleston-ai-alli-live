@@ -203,6 +203,9 @@ class InboundCommunications:
         from contact_approvals import command
         decision=await asyncio.to_thread(command,row['phone'],row['body'])
         if decision is not None:return decision
+        from appointment_reminders import preference_command
+        preference=await asyncio.to_thread(preference_command,row['phone'],row['body'])
+        if preference is not None:return preference
         from openai import AsyncOpenAI
         context=await asyncio.to_thread(self.store.context_for,row['phone'])
         session,registry=await build_session(self.base,context,row['sid'],row['phone'],'sms',self.store,owner_text='\n'.join([str(h.get('body','')) for h in context.get('history',[]) if h.get('channel')=='sms']+[row['body']]))
