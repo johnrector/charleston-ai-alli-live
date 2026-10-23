@@ -128,7 +128,15 @@ def data():
         people=[promises.serial(row) for row in cur.fetchall()]
         cur.execute("SELECT a.phone,a.code,a.created_at,c.name FROM alli_contact_approval a LEFT JOIN alli_contact_name c ON c.phone=a.phone WHERE a.decision='pending' ORDER BY a.created_at")
         approvals=[promises.serial(row) for row in cur.fetchall()]
-        cur.execute('''SELECT u.id,u.payload,u.created_at FROM alli_communication_update u
+        cur.execute('''WITH latest AS (
+            SELECT DISTINCT ON (CASE WHEN payload->>'source'='business_tool_result' THEN 'action:'||id::text
+                WHEN payload->>'source'='conversation_report' THEN 'report:'||coalesce(payload->>'sid',id::text)
+                ELSE coalesce('sid:'||(payload->>'sid'),'update:'||id::text) END) id,payload,created_at
+            FROM alli_communication_update WHERE created_at>now()-interval '7 days'
+            ORDER BY CASE WHEN payload->>'source'='business_tool_result' THEN 'action:'||id::text
+                WHEN payload->>'source'='conversation_report' THEN 'report:'||coalesce(payload->>'sid',id::text)
+                ELSE coalesce('sid:'||(payload->>'sid'),'update:'||id::text) END,id DESC)
+            SELECT u.id,u.payload,u.created_at FROM latest u
             WHERE u.payload->>'follow_up_needed'='true' AND NOT EXISTS (SELECT 1 FROM alli_dashboard_ack a WHERE a.update_id=u.id)
             ORDER BY u.id DESC LIMIT 40''')
         attention=[promises.serial(row) for row in cur.fetchall()]
