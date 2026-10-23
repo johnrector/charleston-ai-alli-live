@@ -133,7 +133,7 @@ def reminder_message(event, person):
     location = ' '.join(str(event.get('location','')).split())[:220]
     return (f"Hi {name}, it's Alli, John's AI assistant. A reminder that you're meeting John {when} Eastern. "
             + (f'Location: {location}. ' if location else '')
-            + 'Still good for you? Need directions or have any questions? Reply here. Text STOP REMINDERS to turn off appointment reminders.')
+            + 'Reply here if anything changes. Text STOP REMINDERS to turn off appointment reminders.')
 
 
 def upcoming(now):
@@ -212,7 +212,12 @@ class AppointmentReminders:
             context = dict(kind='appointment_reminder',event_id=item['event_id'],email=item['email'],snapshot=item['snapshot'])
             if item.get('booking_receipt'): context['booking_receipt'] = True
             if not await asyncio.to_thread(revalidate,context,item['phone']): continue
-            body = sms.TextMessage(**{key:item[key] for key in ('request_id','phone','recipient_name','message')})
+            from reminder_reasoning import draft_followup
+            draft=await draft_followup(item)
+            # Calendar may have moved while the reasoning model was working.
+            if not await asyncio.to_thread(revalidate,context,item['phone']):continue
+            context['conversation_draft']={k:v for k,v in draft.items() if k!='message'}
+            body = sms.TextMessage(**{key:item[key] for key in ('request_id','phone','recipient_name')},message=draft['message'])
             scheduled.append(await asyncio.to_thread(sms.enqueue,body,context=context))
         self.last_scan = now.isoformat()
         self.last_error = None

@@ -218,11 +218,14 @@ def session_for(body: OutboundCall, base_session, outcome_tool, executable_tools
         'Only claim the report was saved after the outcome tool confirms success.\n'
         + '\nCURRENT CALL CONTEXT (data):\n' + json.dumps(context, ensure_ascii=True)
     )
-    reasoning_model = base_session.get('delegation', {}).get('responses', {}).get('model', 'gpt-5.6-sol')
+    from reasoning_config import MODEL, REASONING
+    reasoning_model = base_session.get('delegation', {}).get('responses', {}).get('model', MODEL)
+    reasoning = base_session.get('delegation', {}).get('responses', {}).get('reasoning', REASONING)
     session['delegation'] = {
         'type': 'responses',
         'responses': {
             'model': reasoning_model,
+            'reasoning': dict(reasoning),
             'tools': [tool.to_realtime_format() for tool in executable_tools],
             'tool_choice': 'auto',
         },

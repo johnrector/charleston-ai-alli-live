@@ -14,6 +14,9 @@ PERSON=dict(phone=CALLER,name='Jane Doe',email='jane@example.com')
 @pytest.fixture(autouse=True)
 def no_real_booking_reads(monkeypatch):
     monkeypatch.setattr(reminders,'booked_contacts',lambda *a:{})
+    import reminder_reasoning
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(reminder_reasoning,'draft_followup',AsyncMock(side_effect=lambda item:dict(message=item['message'],mode='test')))
 
 
 def event(**changes):
@@ -34,7 +37,7 @@ def test_only_current_timed_meetings_with_the_bound_participant_are_candidates(m
     assert reminders.candidates(NOW)==[]
 
 
-def test_one_deterministic_reminder_offers_questions_and_verified_directions(monkeypatch):
+def test_reminder_facts_do_not_assume_logistical_help_is_needed(monkeypatch):
     monkeypatch.setattr(reminders,'contacts',lambda:{PERSON['email']:PERSON})
     monkeypatch.setattr(reminders,'upcoming',lambda _:[event()])
     result=reminders.candidates(NOW)[0]
@@ -42,7 +45,7 @@ def test_one_deterministic_reminder_offers_questions_and_verified_directions(mon
     assert result['send_at']==NOW.isoformat()
     assert "Hi Jane, it's Alli" in result['message']
     assert '12:30 PM' in result['message'] and '405 Jessen Lane' in result['message']
-    assert 'directions' in result['message'] and 'STOP REMINDERS' in result['message']
+    assert 'directions' not in result['message'] and 'STOP REMINDERS' in result['message']
     assert reminders.candidates(NOW+timedelta(minutes=10))[0]['request_id']==result['request_id']
     assert reminders.candidates(NOW-timedelta(seconds=1))==[]
     assert reminders.candidates(NOW+timedelta(minutes=16))==[]
@@ -100,7 +103,8 @@ def test_scanner_passes_server_owned_event_binding_to_outbox(monkeypatch):
     monkeypatch.setattr(reminders,'revalidate',lambda *a:True)
     save=Mock(return_value=dict(status='scheduled'));monkeypatch.setattr(sms,'enqueue',save)
     asyncio.run(reminders.AppointmentReminders().run_once())
-    assert save.call_args.kwargs['context']==dict(kind='appointment_reminder',event_id='event',email=PERSON['email'],snapshot='snap')
+    context=save.call_args.kwargs['context']
+    assert {k:v for k,v in context.items() if k!='conversation_draft'}==dict(kind='appointment_reminder',event_id='event',email=PERSON['email'],snapshot='snap')
 
 
 def test_changed_calendar_is_checked_before_any_twilio_send(service,monkeypatch):

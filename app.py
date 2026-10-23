@@ -18,6 +18,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from google_integration import router as google_router, check_calendar, create_meeting, send_email
 from public_pages import router as public_router
+from reasoning_config import MODEL, EFFORT, REASONING
 
 FOREGROUND = """You are Alli, John Rector's AI assistant with Charleston AI, calling on his behalf.
 John is the principal requesting the call; the recipient is the person you are calling. Do not confuse them.
@@ -46,7 +47,8 @@ SESSION_CONFIG = {
     "delegation": {
         "type": "responses",
         "responses": {
-            "model": "gpt-5.6-sol",
+            "model": MODEL,
+            "reasoning": dict(REASONING),
             "tools": [tool.to_realtime_format() for tool in (check_calendar, create_meeting, send_email)],
             "tool_choice": "auto",
         },
@@ -90,12 +92,14 @@ def call_session(body: DemoCall):
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "voice_model": "gpt-live-1", "reasoning_model": "gpt-5.6-sol",
+    return {"ok": True, "voice_model": "gpt-live-1", "reasoning_model": MODEL, "reasoning_effort": EFFORT,
             "build_commit": os.getenv("RENDER_GIT_COMMIT", "local"),
             "outbound_api": "manual-actions-v2",
             "inbound_api": "two-way-v1",
             "contact_policy": "saved-contact-v1",
             "contact_approval_api": "owner-sms-v1",
+            "dashboard_api": "owner-dashboard-v1",
+            "promises_worker_ready": promise_worker.ready,
             "outbound_sms_api": "scheduled-sms-v1",
             "outbound_sms_worker_ready": scheduled_sms.ready,
             "appointment_reminders_worker_ready": appointment_reminders.ready,
@@ -152,6 +156,12 @@ scheduled_sms.install(app)
 from appointment_reminders import AppointmentReminders
 appointment_reminders = AppointmentReminders()
 appointment_reminders.install(app)
+
+from promises import PromiseWorker
+promise_worker = PromiseWorker()
+promise_worker.install(app)
+from dashboard import install_dashboard
+install_dashboard(app, inbound_communications, appointment_reminders, promise_worker)
 
 from mcp_integration import install_mcp
 from outbound_profiles import OutboundCall

@@ -334,3 +334,34 @@ one timely reminder, and offers help with directions/questions. Use
 Default is two hours before a confirmed meeting, with 8 PM–8 AM Eastern quiet
 hours, recipient opt-outs, fresh calendar checks and durable deduplication.
 Do not claim every saved phone can match every calendar event automatically: use a saved invitation email or a verified Alli booking receipt binding that exact event to the approved phone. This does not activate automatic calls.
+
+## Private dashboard, promises and contextual reasoning — October 23, 2026
+
+John's private control panel is `/dashboard` on the existing cloud service.
+It uses owner-phone one-time codes and revocable sessions. Calls, texts,
+calendar/email work and promises all continue while John's Mac is off.
+
+When an approved friend asks Alli to get an answer from John, use
+`record_promise` before promising later follow-through. The phone is bound by the
+server; a model cannot substitute another recipient or approve its own answer.
+Use `get_my_promises` for continuity, avoid duplicates, and do not promise a
+response time. Session preparation/focus supplied by the friend can be saved as
+`needs_answer=false` so John receives the context without inventing an answer.
+Only John can supply the outgoing answer, complete a manual task with a note, or
+cancel open work. Owner SMS can inspect `list_open_promises`, use
+`answer_promise`, or reply `ANSWER <promise ID> <exact answer>`. Queue acceptance
+is not delivery. Errors/uncertain sends remain visible and must not be resent
+blindly. A saved request is not a booking or proof that John agreed.
+
+Use context and judgment, not a script or checklist. A repeat visitor may need a
+session-focus question rather than directions. Do not re-ask questions already
+answered, assert attendance from a past calendar item, or fabricate familiarity.
+The reminder worker reads the bound contact's own calendar/conversation context
+and drafts one useful optional question; verified appointment facts, permissions,
+quiet hours, opt-outs and send deduplication remain enforced by code.
+
+The selected reasoning backend is GPT-6 Astra with high reasoning for text,
+contextual drafts and delegated call actions. Keep the existing GPT-Live voice
+layer. Current official model guidance and live project probes were checked
+before selecting this combination. Further upgrades still follow the policy at
+the top of this file; do not silently fall back to an older low-reasoning model.

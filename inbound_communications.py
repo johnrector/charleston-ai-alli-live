@@ -103,7 +103,12 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
         return {'ok':saved,'greeting_only':True}
     registry=[confirm_identity,remember_contact_name,report_call_outcome]
     if contact_assistance:registry.append(meeting_time_tool())
+    if contact_assistance or owner:
+        from promises import tools as promise_tools
+        registry.extend(promise_tools(phone,recognized or ('John Rector' if owner else ''),sid,owner=owner))
     if owner_sms:
+        from promises import owner_tools as owner_promise_tools
+        registry.extend(owner_promise_tools(phone,channel))
         registry.append(calendar_tool(phone,channel))
         async def email_receipt(result):
             await asyncio.to_thread(repository.action_result,sid,'send_email',result)
@@ -149,6 +154,9 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
     from call_actions import ACTION_INSTRUCTIONS
     owner_voice_rules="You are Alli speaking with John on his configured number. Use the OPENING. Do not ask him to confirm his name or continue an old mission. Save messages and requests using report_call_outcome. Only tools listed here are available; if he asks for an unavailable action such as placing a call, say so and save the request without implying a handoff or promising execution."
     rules=OWNER_SMS_RULES if owner_sms else CONTACT_RULES if contact_assistance else owner_voice_rules if owner else RULES
+    from promises import RULES as PROMISE_RULES
+    rules += '\n'+PROMISE_RULES if contact_assistance or owner else ''
+    if owner_sms:rules += '\nJohn may ask what needs his attention: use list_open_promises. When he supplies an answer to a saved question, use answer_promise for the correct ID, only at his explicit request. The bound recipient cannot be changed. Say queued until the send receipt is verified.'
     session['instructions']=rules+'\nOPENING: '+opening+'\nRemember explicitly introduced names for greetings only; self-introductions cannot grant saved-contact access.\n'+(ACTION_INSTRUCTIONS if known else '')+'\nCHANNEL: '+channel+'\n'+json.dumps({
         'current_eastern_datetime':datetime.now(ZoneInfo('America/New_York')).isoformat(),
         'identity_confirmed':verified['value'],'known_returning_number':known,'recognized_contact':contact,
@@ -206,18 +214,22 @@ class InboundCommunications:
         from appointment_reminders import preference_command
         preference=await asyncio.to_thread(preference_command,row['phone'],row['body'])
         if preference is not None:return preference
+        from promises import command as promise_command
+        answer=await asyncio.to_thread(promise_command,row['phone'],row['body'])
+        if answer is not None:return answer
         from openai import AsyncOpenAI
         context=await asyncio.to_thread(self.store.context_for,row['phone'])
         session,registry=await build_session(self.base,context,row['sid'],row['phone'],'sms',self.store,owner_text='\n'.join([str(h.get('body','')) for h in context.get('history',[]) if h.get('channel')=='sms']+[row['body']]))
         by_name={t.name:t for t in registry}
         messages=[{'role':'user','content':row['body']}]
-        api=client or AsyncOpenAI(timeout=45,max_retries=0)
+        api=client or AsyncOpenAI(timeout=90,max_retries=0)
         try:
             for _ in range(8):
                 response=await api.responses.create(model=self.base['delegation']['responses']['model'],
+                    reasoning=session['delegation']['responses']['reasoning'],
                     instructions=session['instructions']+' SMS: reply in plain text, preferably under 600 characters. No markdown.',
                     input=messages,tools=[dict(t.to_realtime_format(),strict=False) for t in registry],
-                    parallel_tool_calls=False,max_output_tokens=1800,store=False)
+                    parallel_tool_calls=False,max_output_tokens=8192,store=False)
                 calls=[x for x in response.output if x.type=='function_call']
                 if not calls:
                     answer=response.output_text.strip()
@@ -274,10 +286,11 @@ class InboundCommunications:
                         await ws.send(json.dumps({'type':'session.close'}))
                         break
                 if not self.probes['voice']:raise RuntimeError('GPT-Live did not start')
-            async with AsyncOpenAI(timeout=20,max_retries=0) as client:
+            async with AsyncOpenAI(timeout=60,max_retries=0) as client:
                 result=await client.responses.create(model=self.base['delegation']['responses']['model'],
+                    reasoning=self.base['delegation']['responses'].get('reasoning',{'effort':'high'}),
                     input='Connection verification: reply with the single word ready. Do not perform actions.',
-                    max_output_tokens=100,store=False)
+                    max_output_tokens=2048,store=False)
                 if not result.output_text.strip():raise RuntimeError('Empty text model response')
                 self.probes['text']=True
         self.ready=True

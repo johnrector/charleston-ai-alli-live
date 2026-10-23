@@ -27,5 +27,5 @@ def test_two_calls_keep_their_own_context(monkeypatch):
     assert 'Waterway Boulevard' not in str(captured[0].session_config)
     assert captured[0].session_config['model'] == 'gpt-live-1'
     assert captured[0].session_config['delegation']['type'] == 'responses'
-    assert captured[0].session_config['delegation']['responses']['model'] == 'gpt-5.6-sol'
+    assert captured[0].session_config['delegation']['responses']['model'] == 'gpt-6-astra'
     assert [t['name'] for t in captured[0].session_config['delegation']['responses']['tools']]==['check_calendar','create_meeting','send_email']

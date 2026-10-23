@@ -38,6 +38,10 @@ def initialize():
             initialize_sms(db)
             from appointment_reminders import initialize as initialize_reminders
             initialize_reminders(db)
+            from promises import initialize as initialize_promises
+            initialize_promises(db)
+            from dashboard import initialize as initialize_dashboard
+            initialize_dashboard(db)
             # Preserve owner-supplied contacts independently of mission expiry. Shared
             # numbers with conflicting names are deliberately not auto-approved.
             db.execute(r"""INSERT INTO alli_contact_name(phone,name,source,email)
@@ -114,7 +118,7 @@ def context_for(phone):
                 WHERE phone=%s AND created_at>now()-interval '7 days'
             UNION ALL
             SELECT 'sms','',body,NULL::jsonb,NULL::jsonb,send_at FROM alli_outbound_sms
-                WHERE phone=%s AND send_at>now()-interval '7 days'
+                WHERE phone=%s AND send_at>now()-interval '7 days' AND request_id NOT LIKE 'dashboard-login:%%'
                 AND status IN ('submitted','queued','sent','delivered')
             ) recent ORDER BY created_at DESC LIMIT 12""", (phone,phone)).fetchall()
     return {'mission':matched, 'previous_outcome': rows[0][1] if matched else None,

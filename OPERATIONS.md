@@ -266,3 +266,67 @@ This feature enables proactive SMS only. Existing automatic-call policy and
 switches remain independent. Failed/uncertain sends are not blindly retried or
 converted into unrequested calls. Google scan failures create an actionable
 communication-feed entry at most once per Eastern day.
+
+## Owner dashboard and durable promises — October 23, 2026
+
+`/dashboard` is the private, mobile-friendly cloud control panel. It runs inside
+this existing Render web service; all records, sign-in challenges, sessions and
+promise/outbox handoffs are in Render Postgres. No Mac job or local files are
+needed in normal operation.
+
+Sign-in texts a code only to `ALLI_OWNER_PHONE`, using the existing durable SMS
+outbox. Codes expire after ten minutes, allow five attempts and are single-use;
+requests are limited to three per 15 minutes with at least a minute between them.
+Only a keyed digest is stored in the challenge table. Sessions use random tokens
+stored as SHA-256 digests, expire after 12 hours and are revoked on sign-out.
+Cookies are Secure, HttpOnly, SameSite=Strict, __Host-prefixed. Browser writes need
+an exact allowed Origin and per-session CSRF header. The existing owner API key
+can access the dashboard API via header for operations; it is never embedded in
+the page, URL, JavaScript or browser storage. All dashboard routes are no-store,
+noindex and deny framing. No Google OAuth scopes or credentials were changed.
+
+Overview shows requests needing John, new-contact approvals, live primary-calendar
+entries, outbox receipts, reminder policy and recent communication activity.
+People edits the existing directory; saving a person explicitly approves them.
+Legacy attention items may be acknowledged without deleting the original feed.
+
+`alli_promise` is the commitments ledger, with append-only `alli_promise_event`
+history. Questions require John's answer; manual tasks require his completion
+note. Only owner-approved exact text is executable, through an atomic transaction
+into the existing SMS outbox. The worker scans every ten seconds; tasks due and
+questions needing John enqueue one daytime owner notification. Unknown contacts
+continue through the existing approval flow. Direct owner answers may be entered
+in the dashboard or by `ANSWER <12-character promise ID> <exact answer>` from his
+signed SMS. Owner SMS also has `list_open_promises` and `answer_promise` tools.
+Saved friends have phone-bound `record_promise` / `get_my_promises` on both calls
+and texts. Preparation/session-focus requests can use `needs_answer=false` to
+save a task for John instead of pretending a question needs an answer.
+
+Ready answers/texts become queued, then completed only after a provider sent or
+delivered receipt (the dashboard distinguishes those). Failed, undelivered,
+expired and uncertain work becomes blocked and is not blindly retried. Missed
+send windows older than 15 minutes require review. Queued cancellation locks and
+cancels an unclaimed outbox item atomically; an already claimed send cannot be
+recalled. Optimistic revisions prevent stale dashboard answers from overwriting
+new work. Per-intent IDs and open-question matching prevent duplicate handoffs.
+
+Reasoning uses `reasoning_config.py`: GPT-6 Astra, high effort. This applies to
+SMS reasoning, GPT-Live's delegated Responses backend and contextual reminder
+wording. The voice layer remains GPT-Live-1 with its current audio configuration.
+Startup verifies both model routes. Reminder wording adds at most one contextually
+useful question, informed by this contact's recent exchanges and up to 180 days
+of their own prior scheduled calendar entries. Past schedule is not proof of
+attendance. Calendar facts and eligibility stay deterministic and are rechecked
+before/after drafting and immediately before sending. Draft failure keeps factual
+wording; it does not silently switch to an older model. No scripted directions
+question is required. Exact owner-scheduled messages retain their approved text.
+
+Validation: run `python -m pytest -q`. In the cloud shell,
+`python tests/check_dashboard_database.py` checks real Postgres semantics using
+TEMP shadow tables and rolls all fixture data back; it sends no messages and
+changes no calendars. It must run in its own process, never in the live worker.
+
+Rollback: revert this release and deploy. All schema additions are additive and
+compatible with the prior application. Reverting removes dashboard/promise
+processing; durable ledger rows remain for a later fixed release. Stop/inspect any
+already queued SMS separately: a deploy rollback cannot unsend a message.

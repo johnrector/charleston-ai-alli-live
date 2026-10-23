@@ -85,30 +85,35 @@ def get(request_id):
 
 def enqueue(body: TextMessage, *, context=None):
     store.initialize()
+    with store.connection() as db:
+        return enqueue_in_db(db, body, context=context)
+
+
+def enqueue_in_db(db, body: TextMessage, *, context=None):
+    """Shared transaction for atomic promise/outbox hand-off. Caller initializes."""
     value = body.model_dump(mode='json')
     if body.send_at: value['send_at'] = body.send_at.astimezone(timezone.utc).isoformat()
     if context: value['context'] = context
     fingerprint = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
-    with store.connection() as db:
-        # Serialize same-ID intent checks, including concurrent enqueue/cancel.
-        db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,301849630157))', (body.request_id,))
-        prior = db.execute(f'SELECT fingerprint,{FIELDS} FROM alli_outbound_sms WHERE request_id=%s', (body.request_id,)).fetchone()
-        if prior:
-            if prior[0] != fingerprint: raise ValueError('request_id already belongs to a different text; do not vary an uncertain request')
-            return dict(row_dict(prior[1:]), duplicate=True)
-        now = datetime.now(timezone.utc)
-        when = body.send_at.astimezone(timezone.utc) if body.send_at else now
-        if when < now - timedelta(seconds=60): raise ValueError('Choose a future send time with an explicit UTC offset')
-        if when > now + timedelta(days=366): raise ValueError('Schedule texts at most one year ahead')
-        row = db.execute(f'''INSERT INTO alli_outbound_sms
-            (request_id,fingerprint,phone,recipient_name,body,send_at,expires_at,callback_token,context)
-            VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING {FIELDS}''',
-            (body.request_id, fingerprint, body.phone, body.recipient_name, body.message,
-             when, when + timedelta(minutes=15), secrets.token_urlsafe(24), Jsonb(context or {}))).fetchone()
-        store.notify(db, 'outbound-sms:' + body.request_id + ':scheduled',
-                     dict(channel='sms', direction='outbound', request_id=body.request_id,
-                          phone=body.phone, status='scheduled', send_at=when.isoformat(),
-                          summary='Owner-authorized text saved to the cloud outbox.'))
+    # Serialize same-ID intent checks, including concurrent enqueue/cancel.
+    db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,301849630157))', (body.request_id,))
+    prior = db.execute(f'SELECT fingerprint,{FIELDS} FROM alli_outbound_sms WHERE request_id=%s', (body.request_id,)).fetchone()
+    if prior:
+        if prior[0] != fingerprint: raise ValueError('request_id already belongs to a different text; do not vary an uncertain request')
+        return dict(row_dict(prior[1:]), duplicate=True)
+    now = datetime.now(timezone.utc)
+    when = body.send_at.astimezone(timezone.utc) if body.send_at else now
+    if when < now - timedelta(seconds=60): raise ValueError('Choose a future send time with an explicit UTC offset')
+    if when > now + timedelta(days=366): raise ValueError('Schedule texts at most one year ahead')
+    row = db.execute(f'''INSERT INTO alli_outbound_sms
+        (request_id,fingerprint,phone,recipient_name,body,send_at,expires_at,callback_token,context)
+        VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING {FIELDS}''',
+        (body.request_id, fingerprint, body.phone, body.recipient_name, body.message,
+         when, when + timedelta(minutes=15), secrets.token_urlsafe(24), Jsonb(context or {}))).fetchone()
+    store.notify(db, 'outbound-sms:' + body.request_id + ':scheduled',
+                 dict(channel='sms', direction='outbound', request_id=body.request_id,
+                      phone=body.phone, status='scheduled', send_at=when.isoformat(),
+                      summary='Owner-authorized text saved to the cloud outbox.'))
     return row_dict(row)
 
 
@@ -163,6 +168,8 @@ def receipt(request_id, message_sid=None, status='submitted', error_code=None, c
         db.execute('''UPDATE alli_outbound_sms SET status=%s,message_sid=coalesce(message_sid,%s),
             error_code=coalesce(%s,error_code),updated_at=now() WHERE request_id=%s''',
             (status, message_sid, str(error_code)[:20] if error_code else None, request_id))
+        if request_id.startswith('dashboard-login:') and status != 'uncertain':
+            db.execute("UPDATE alli_outbound_sms SET body='Dashboard sign-in code [redacted after provider acceptance]' WHERE request_id=%s",(request_id,))
         if status in TERMINAL | {'submitted', 'uncertain'}:
             store.notify(db, 'outbound-sms:' + request_id + ':' + status,
                          dict(channel='sms', direction='outbound', request_id=request_id,
@@ -182,6 +189,11 @@ class ScheduledSMS:
         if not row: return False
         try:
             context = row.get('context') or {}
+            if context.get('kind') == 'promise':
+                from promises import revalidate
+                if not await asyncio.to_thread(revalidate,context,row['phone']):
+                    await asyncio.to_thread(receipt,row['request_id'],status='cancelled',error_code='promise_changed')
+                    return True
             if context.get('kind') == 'appointment_reminder':
                 from appointment_reminders import revalidate
                 if not await asyncio.to_thread(revalidate,context,row['phone']):
