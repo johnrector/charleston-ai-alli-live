@@ -16,7 +16,7 @@ def test_owner_overrides_recipient_mission(monkeypatch):
     mission={'recipient_name':'Jane Doe'}
     result=lookup(monkeypatch,[(mission,{})],[(mission,)],('Jane','self_introduced'),'+18435550100')
     assert result['mission'] is None
-    assert result['contact']=={'name':'John Rector','source':'owner_configured','is_owner':True}
+    assert result['contact']=={'name':'John Rector','source':'owner_configured','is_owner':True,'email':''}
 
 def test_old_outbound_recognized_without_reauthorizing_mission(monkeypatch):
     result=lookup(monkeypatch,[],[({'recipient_name':'Jane Doe'},)],None)
@@ -34,3 +34,37 @@ def test_ambiguous_number_does_not_choose_name_or_mission(monkeypatch):
     jane={'recipient_name':'Jane Doe'}
     result=lookup(monkeypatch,[(jane,{})],[(jane,),({'recipient_name':'Bill Doe'},)],('Jane','self_introduced'))
     assert result['contact'] is None and result['mission'] is None
+
+def test_owner_saved_contact_overrides_old_ambiguous_mission_names(monkeypatch):
+    jane={'recipient_name':'Jane Doe'}
+    result=lookup(monkeypatch,[(jane,{})],[(jane,),({'recipient_name':'Bill Doe'},)],('Current Friend','owner_saved_contact','friend@example.com'))
+    assert result['contact']['name']=='Current Friend'
+    assert result['contact']['email']=='friend@example.com'
+
+
+def test_saved_contact_survives_without_outbound_missions(monkeypatch):
+    result=lookup(monkeypatch,[],[],('Jane Doe','owner_saved_contact','jane@example.com'))
+    assert result['mission'] is None
+    assert result['contact']['source']=='owner_saved_contact'
+
+
+def test_self_introduction_cannot_overwrite_owner_approved_record(monkeypatch):
+    monkeypatch.setattr(store,'initialize',lambda:None)
+    db=Mock()
+    @contextmanager
+    def connection():yield db
+    monkeypatch.setattr(store,'connection',connection)
+    assert store.remember_name('+18435550100','John Rector')
+    sql,args=db.execute.call_args.args
+    assert "WHERE alli_contact_name.source='self_introduced'" in sql
+
+
+def test_owner_saved_number_normalizes_and_persists_optional_email(monkeypatch):
+    monkeypatch.setattr(store,'initialize',lambda:None)
+    db=Mock()
+    @contextmanager
+    def connection():yield db
+    monkeypatch.setattr(store,'connection',connection)
+    result=store.save_contact('8435550100','Jane Doe','jane@example.com')
+    assert result['phone']=='+18435550100'
+    assert db.execute.call_args.args[1]==('+18435550100','Jane Doe','jane@example.com')

@@ -90,11 +90,14 @@ a separately authorized recipient and mission; local tests do not establish it.
 
 The approved number is +1 854 444 7852. Inbound voice uses `/inbound/voice`
 with the same pinned GPT-Live voice and Responses delegation architecture.
-SMS uses `/inbound/sms` and the same reasoning model and mission-scoped tools.
-Recent outbound missions (30 days) and inbound history (7 days) are joined by
-normalized international phone number. Greet recognized people by first name;
-confirm their identity and agreement to continue the prior mission before
-disclosing details or using calendar/email tools. Unknown or ambiguous callers can leave a message only.
+SMS uses `/inbound/sms` and the same reasoning model. Calls and SMS share the
+durable `alli_contact_name` directory in the existing Render Postgres database.
+Owner-saved contacts and unambiguous contacts from owner-authorized calls receive
+a first-name greeting and standing assistance for their own appointments,
+messages and reminders. Do not require them to repeat their identity or continue
+an old mission. Historical mission date windows do not limit new requests.
+Unknown or ambiguous callers receive a generic greeting and can leave a message;
+a self-introduced name is remembered for greetings but grants no appointment access.
 Phone/name matching is conversational confirmation, not strong authentication;
 never handle sensitive account changes through it.
 
@@ -117,8 +120,10 @@ blindly retried. The cloud dot's monitoring schedule is configured separately.
 Names explicitly introduced by inbound callers or texters are stored in the cloud
 for greetings across both channels. SMS includes the recent exchange even for
 new contacts. `ALLI_OWNER_PHONE` identifies John for a distinct owner greeting;
-this does not grant new calendar/email permissions. Never ask John whether he
-is returning his own call. Ambiguous shared numbers receive a neutral greeting.
+John is already recognized on both voice and SMS; never ask him to confirm
+his name or whether he is returning his own call. Owner SMS keeps its existing
+calendar lookup and requested-email tools plus contact saving and reminders;
+owner voice can save requests but cannot place outbound calls. Ambiguous shared numbers receive a neutral greeting.
 
 ## Completion reporting — owner-approved October 2, 2026
 
@@ -195,3 +200,37 @@ completion, and retain the existing single-submission guard. Longer ringing
 does not guarantee voicemail delivery or authorize an automatic retry. Report
 no-answer separately from voicemail submitted or delivery uncertain. The
 GPT-Live voice and delegated calendar/email architecture are unchanged.
+
+## Saved contact assistance — October 23, 2026
+
+This supersedes the earlier identity-confirmation requirement for saved contacts
+on inbound voice and SMS. Numbers are normalized to E.164; US ten-digit, leading
+1 and formatted numbers resolve to the same record. No new database/service is
+needed. Startup adds an optional invitation email and seeds unambiguous contacts
+from prior owner-authorized missions. Owner-saved records take precedence.
+
+John can text: “Save Jane Doe, 8435550100, jane@example.com as a friend.” The
+owner-only `save_friend_contact` tool stores the supplied number/name and optional
+email. A caller cannot approve themselves or overwrite an owner-approved name.
+Shared-number conflicts stay generic until John supplies a specific contact.
+
+Saved contacts may check availability, book agreed meetings, find/move/cancel
+only their own meetings, and leave a message. No repeating name/returning-call
+question is needed. Confirm missing appointment details, check live availability,
+and preserve the existing event when moving it. Invitations use the saved email;
+if no email is saved, ask the recipient for it. Existing tool receipts, duplicate
+protection and uncertain-write reporting remain in force. Busy blocks and unrelated
+event details are excluded from contact availability responses.
+
+`create_reminder_for_john` saves a private, transparent five-minute event on John's
+primary calendar with a popup at the agreed time. It does not text/email John;
+notification delivery depends on his Calendar settings and is never guaranteed.
+Untimed messages use the durable communication feed and do not promise a response.
+The feed also reports directory counts by source for deployment verification,
+without publishing numbers/names in the public health endpoint.
+
+The GPT-Live voice model, delegated reasoning model, outbound calling behavior
+and voicemail timeout remain as deployed. Roll back with a revert of this release;
+the added email column and seeded directory rows are compatible with the prior
+code, though the prior identity loop would return. No calls/messages/calendar
+changes are made merely by deploying or running the mocked regression suite.

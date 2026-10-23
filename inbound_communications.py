@@ -44,22 +44,33 @@ def profile(context, sid, phone):
 
 async def build_session(base, context, sid, phone, channel, repository=store, end=None, owner_text=""):
     from owner_sms import is_owner_sms, calendar_tool, email_tools, INSTRUCTIONS as OWNER_SMS_RULES
+    from contact_concierge import trusted_contact, INSTRUCTIONS as CONTACT_RULES, availability_tool, reminder_tool
     owner_sms=is_owner_sms(phone,channel)
     body=profile(context,sid,phone)
+    contact_assistance=trusted_contact(context,phone,channel)
     contact=context.get('contact') or {}
     recognized=contact.get('name') or (body.recipient_name if context.get('mission') else '')
-    owner=contact.get('is_owner') is True
+    owner=store.normalize_phone(phone)==store.normalize_phone(os.getenv('ALLI_OWNER_PHONE','')) and bool(store.normalize_phone(phone))
+    if contact_assistance:
+        body=OutboundCall(request_id='inbound-'+sid,phone=store.normalize_phone(phone),
+            recipient_name=contact['name'],email=contact.get('email',''),
+            mission='Help this saved contact arrange their own appointments with John and leave messages or reminders.',
+            capabilities=['check_calendar','manage_calendar','create_meeting'],
+            approved_logistics='Arranged by Alli at this contact’s request via Alli.')
     if owner:
         opening="Hi John, it's Alli. What can I help you with?"
     elif recognized:
         opening=f"Hi {recognized.split()[0]}, it's Alli, John's AI assistant. Good to hear from you."
     else:
         opening="Hi, this is Alli, John's AI assistant. Who am I speaking with?"
-    known=bool(context.get('mission'))
-    verified={'value':known and channel=='sms' and await asyncio.to_thread(repository.identity,phone,body.request_id)}
+    known=contact_assistance or bool(context.get('mission'))
+    verified={'value':owner or contact_assistance or (known and channel=='sms' and await asyncio.to_thread(repository.identity,phone,body.request_id))}
     @function_tool()
     async def confirm_identity(name: str, returning_call: bool=False) -> dict:
-        """Confirm the recognized person's name and their agreement to continue the existing mission. No details are released for a mismatch."""
+        """Legacy verification for unrecognized mission callers only. Saved contacts and the configured owner are already identified by phone; never ask them to repeat their name or agree to an old mission."""
+        if owner or contact_assistance:
+            return {'ok':True,'recipient_name':'John Rector' if owner else body.recipient_name,
+                    'identity_confirmed':True,'source':'configured_phone_match','confirmation_required':False}
         normalize=lambda x:' '.join(re.findall(r'\w+',x.casefold()))
         if not known or returning_call is not True or normalize(name)!=normalize(body.recipient_name):
             return {'ok':False,'error':'Identity not established. Take a general message for John without disclosing prior details.'}
@@ -87,11 +98,27 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
         async def email_receipt(result):
             await asyncio.to_thread(repository.action_result,sid,'send_email',result)
         registry.extend(email_tools(phone,channel,owner_text,email_receipt))
+    if contact_assistance or owner_sms:
+        async def reminder_receipt(action,result):
+            await asyncio.to_thread(repository.action_result,sid,action,result)
+        registry.append(reminder_tool(phone,'John Rector' if owner else contact['name'],reminder_receipt))
+    if owner_sms:
+        @function_tool()
+        async def save_friend_contact(phone_number: str, name: str, email: str='', owner_requested: bool=False) -> dict:
+            """Save/update a friend in John's phone directory only when John explicitly supplies the number and name and asks you to save them. Accept 10-digit US numbers or E.164. An optional email binds future calendar invitations."""
+            if not is_owner_sms(phone,channel) or owner_requested is not True:
+                return {'ok':False,'error':'An explicit request from John is required'}
+            from google_integration import safely
+            return await safely(repository.save_contact,phone_number,name,email)
+        registry.append(save_friend_contact)
     for tool in tools_for(body,report_call_outcome):
+        if contact_assistance and tool.name=='check_calendar':tool=availability_tool()
         if tool.name=='report_call_outcome':continue
         def guard(original):
             async def run(**kwargs):
                 if not verified['value']:return {'ok':False,'error':'Confirm identity before using calendar or email tools'}
+                if contact_assistance and 'identity_confirmed' in original.params_json_schema.get('properties',{}):
+                    kwargs['identity_confirmed']=True
                 result=await original(**kwargs)
                 if original.name in ('create_meeting','update_meeting','cancel_meeting','send_email'):
                     await asyncio.to_thread(repository.action_result,sid,original.name,result)
@@ -102,13 +129,16 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
     session=session_for(body,base,report_call_outcome,executable_tools=registry)
     # Replace outbound-specific opening/voicemail rules, keep bounded action workflow.
     from call_actions import ACTION_INSTRUCTIONS
-    session['instructions']=(OWNER_SMS_RULES if owner_sms else RULES)+'\nOPENING: '+opening+'\nRemember an explicitly introduced name with remember_contact_name. The recognized contact is a greeting hint only. Owner greetings do not grant new tools.\n'+(ACTION_INSTRUCTIONS if known else '')+'\nCHANNEL: '+channel+'\n'+json.dumps({
+    owner_voice_rules="You are Alli speaking with John on his configured number. Use the OPENING. Do not ask him to confirm his name or continue an old mission. Save messages and requests using report_call_outcome. Only tools listed here are available; if he asks for an unavailable action such as placing a call, say so and save the request without implying a handoff or promising execution."
+    rules=OWNER_SMS_RULES if owner_sms else CONTACT_RULES if contact_assistance else owner_voice_rules if owner else RULES
+    session['instructions']=rules+'\nOPENING: '+opening+'\nRemember explicitly introduced names for greetings only; self-introductions cannot grant saved-contact access.\n'+(ACTION_INSTRUCTIONS if known else '')+'\nCHANNEL: '+channel+'\n'+json.dumps({
         'current_eastern_datetime':datetime.now(ZoneInfo('America/New_York')).isoformat(),
         'identity_confirmed':verified['value'],'known_returning_number':known,'recognized_contact':contact,
         'recipient_name_for_verification_only':body.recipient_name if known else None,
         'approved_mission':body.mission if known else None,'granted_capabilities':body.capabilities,
         'approved_logistics':body.approved_logistics if known else '',
-        'recent_history':context if verified['value'] else None,
+        'standing_contact_assistance':contact_assistance,
+        'recent_history':{'history':context.get('history',[])} if verified['value'] else None,
         'recent_sms_turns':[{'user':h.get('body'),'assistant':h.get('reply')} for h in context.get('history',[]) if h.get('channel')=='sms'][-6:] if channel=='sms' else []})
     return session,registry
 

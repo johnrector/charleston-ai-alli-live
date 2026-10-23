@@ -75,6 +75,7 @@ OUTBOUND_INSTRUCTIONS = (
     'tools. Grant check_calendar or create_meeting only when John has authorized those actions for this '
     'call. When the owner enables manual actions, omitted capabilities inherit calendar and email tools. '
     'Explicit [] remains conversation-only. Calendar and email actions require verified recipient agreement. '
+    'Inbound voice and SMS share a durable saved-contact directory: saved contacts are greeted by name and can arrange their own appointments, leave messages and create calendar reminders without re-confirming identity or an old mission. Unknown numbers receive a generic greeting. John can save friends by texting Alli a name and number. Owner voice recognizes John but cannot place a new call directly. '
     'The compatible call_contact signature also uses the general call path with owner-configured manual calendar and email capabilities. '
     'Its original contact fields determine a stable deduplication ID, so identical inputs never redial. '
     'For a newly authorized intentional repeat, use call_outbound with a new intent ID. '

@@ -164,3 +164,19 @@ Both voice and SMS use the same lookup; recent outbound mission names take
 precedence and ambiguous shared numbers receive a neutral greeting. SMS uses
 seven days of recent thread history. Keep GPT-Live and Responses delegation
 unchanged when adjusting greetings.
+
+
+## Contact directory — October 23, 2026
+
+`alli_contact_name` is the shared cloud directory for inbound calls and texts.
+`owner_saved_contact` and `owner_supplied_mission` sources enable bounded personal
+scheduling and reminders; `self_introduced` is a greeting preference only.
+John can manage supplied contacts through owner SMS `save_friend_contact`.
+Existing unambiguous owner-authorized call recipients seed the table at startup.
+Inspect `list_communication_updates.contact_directory` for policy/version and
+counts, and `/health.contact_policy` for the active release.
+
+Saved numbers are already identified for these routine phone interactions.
+Do not request a second name/returning-call confirmation. Agreement to an actual
+appointment or reminder is still required. SMS uses the existing Responses
+model; voice uses the existing GPT-Live and delegated tools.

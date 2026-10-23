@@ -31,6 +31,19 @@ def initialize():
                 phone text NOT NULL, request_id text NOT NULL, verified_at timestamptz NOT NULL DEFAULT now(),
                 PRIMARY KEY(phone,request_id))''')
             db.execute('''CREATE TABLE IF NOT EXISTS alli_contact_name (phone text PRIMARY KEY, name text NOT NULL, source text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())''')
+            db.execute("ALTER TABLE alli_contact_name ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT ''")
+            # Preserve owner-supplied contacts independently of mission expiry. Shared
+            # numbers with conflicting names are deliberately not auto-approved.
+            db.execute(r"""INSERT INTO alli_contact_name(phone,name,source,email)
+                SELECT context->>'phone', min(context->>'recipient_name'), 'owner_supplied_mission',
+                    CASE WHEN count(DISTINCT lower(nullif(context->>'email','')))=1
+                         THEN coalesce(min(nullif(context->>'email','')),'') ELSE '' END
+                FROM alli_appointment_dispatch WHERE status<>'blocked'
+                    AND context->>'phone' ~ '^\+[1-9][0-9]{7,14}$'
+                    AND length(trim(context->>'recipient_name')) BETWEEN 1 AND 100
+                GROUP BY context->>'phone' HAVING count(DISTINCT lower(trim(context->>'recipient_name')))=1
+                ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name,source=EXCLUDED.source,email=EXCLUDED.email
+                WHERE alli_contact_name.source='self_introduced'""")
         _ready = True
 
 def notify(db, key, payload):
@@ -42,7 +55,9 @@ def updates(after_id=0, limit=30):
     initialize()
     with connection() as db:
         rows = db.execute('SELECT id,payload,created_at FROM alli_communication_update WHERE id>%s ORDER BY id LIMIT %s', (after_id, limit)).fetchall()
-    return {'updates':[dict(id=r[0], **r[1], created_at=r[2].isoformat()) for r in rows], 'next_cursor':rows[-1][0] if rows else after_id}
+        counts=db.execute('SELECT source,count(*) FROM alli_contact_name GROUP BY source').fetchall()
+    return {'updates':[dict(id=r[0], **r[1], created_at=r[2].isoformat()) for r in rows], 'next_cursor':rows[-1][0] if rows else after_id,
+            'contact_directory':{'policy':'saved-contact-v1','counts_by_source':dict(counts)}}
 
 def normalize_phone(value):
     try:
@@ -60,7 +75,8 @@ def remember_name(phone, name):
     initialize()
     with connection() as db:
         db.execute("""INSERT INTO alli_contact_name(phone,name,source) VALUES(%s,%s,'self_introduced')
-            ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name,source=EXCLUDED.source,updated_at=now()""",(phone,name))
+            ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name,source=EXCLUDED.source,updated_at=now()
+            WHERE alli_contact_name.source='self_introduced'""",(phone,name))
     return True
 
 def context_for(phone):
@@ -73,18 +89,37 @@ def context_for(phone):
             WHERE context->>'phone'=%s AND status<>'blocked' AND created_at>now()-interval '30 days'
             ORDER BY created_at DESC LIMIT 3""", (phone,)).fetchall()
         greeting_rows=db.execute("""SELECT context FROM alli_appointment_dispatch
-            WHERE context->>'phone'=%s AND status<>'blocked' ORDER BY created_at DESC LIMIT 3""",(phone,)).fetchall()
+            WHERE context->>'phone'=%s AND status<>'blocked' ORDER BY created_at DESC""",(phone,)).fetchall()
         names = {r[0].get('recipient_name','').strip().casefold() for r in greeting_rows}
         matched = rows[0][0] if rows and len(names)==1 and not owner else None
-        contact=db.execute('SELECT name,source FROM alli_contact_name WHERE phone=%s',(phone,)).fetchone()
+        contact=db.execute('SELECT name,source,email FROM alli_contact_name WHERE phone=%s',(phone,)).fetchone()
         if owner:contact=('John Rector','owner_configured')
-        elif greeting_rows and len(names)==1:contact=(greeting_rows[0][0]['recipient_name'],'owner_supplied_mission')
+        elif contact and contact[1]=='owner_saved_contact':pass
         elif len(names)>1:contact=None
+        elif greeting_rows and len(names)==1:
+            contact=(greeting_rows[0][0]['recipient_name'],'owner_supplied_mission',greeting_rows[0][0].get('email',''))
         history = db.execute("""SELECT channel,body,reply,report,transcript FROM alli_inbound
             WHERE phone=%s AND created_at>now()-interval '7 days' ORDER BY created_at DESC LIMIT 12""", (phone,)).fetchall()
     return {'mission':matched, 'previous_outcome': rows[0][1] if matched else None,
-            'contact':{'name':contact[0],'source':contact[1],'is_owner':owner} if contact else None,
+            'contact':dict(name=contact[0],source=contact[1],is_owner=owner,
+                email=contact[2] if len(contact)>2 else '') if contact else None,
             'history':[dict(zip(('channel','body','reply','report','transcript'), r)) for r in reversed(history)]}
+
+def save_contact(phone, name, email=''):
+    """Owner-only callers of this function maintain the standing SMS directory."""
+    phone=normalize_phone(phone)
+    name=' '.join(name.strip().split())
+    if not phone or not 1<=len(name)<=100 or any(c in name for c in '<>'):
+        raise ValueError('Supply a valid phone number and contact name')
+    if email:
+        from google_integration import email_address
+        email_address(email)
+    initialize()
+    with connection() as db:
+        db.execute("""INSERT INTO alli_contact_name(phone,name,source,email)
+            VALUES(%s,%s,'owner_saved_contact',%s) ON CONFLICT(phone) DO UPDATE SET
+            name=EXCLUDED.name,source=EXCLUDED.source,email=EXCLUDED.email,updated_at=now()""",(phone,name,email))
+    return {'ok':True,'phone':phone,'name':name,'email':email}
 
 def receive(sid, phone, channel, body='', context=None):
     initialize()

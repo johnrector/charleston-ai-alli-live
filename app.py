@@ -92,6 +92,7 @@ async def health():
             "build_commit": os.getenv("RENDER_GIT_COMMIT", "local"),
             "outbound_api": "manual-actions-v2",
             "inbound_api": "two-way-v1",
+            "contact_policy": "saved-contact-v1",
             "inbound_worker_ready": inbound_communications.ready,
             "inbound_model_checks": inbound_communications.probes,
             "manual_actions_enabled": os.getenv("MANUAL_CALL_ACTIONS_ENABLED", "").lower() == "true",
