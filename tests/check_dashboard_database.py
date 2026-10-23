@@ -51,10 +51,12 @@ def main():
             task=p.create('QA task',details='Manual work with a receipt')['promise']
             assert p.change(task['id'],'complete','Verified in temporary database')['promise']['state']=='completed'
             cancelled=p.create('QA scheduled text',phone=phone,contact_name='QA Friend',kind='text',response='QA text')['promise']
+            db.execute('UPDATE alli_promise SET due_at=now() WHERE id=%s',(cancelled['id'],))
             p.process_once()
             assert p.change(cancelled['id'],'cancel')['promise']['state']=='cancelled'
             assert sms.get('promise:'+cancelled['id'])['status']=='cancelled'
             failed=p.create('QA failure text',phone=phone,contact_name='QA Friend',kind='text',response='QA failure')['promise']
+            db.execute('UPDATE alli_promise SET due_at=now() WHERE id=%s',(failed['id'],))
             p.process_once()
             db.execute("UPDATE alli_outbound_sms SET status='uncertain' WHERE request_id=%s",('promise:'+failed['id'],))
             p.process_once();p.process_once()
