@@ -169,3 +169,15 @@ def test_bad_attendee_rejected_before_network(monkeypatch, name, email):
     with pytest.raises(ValueError):
         g.meeting(name, email, '2030-01-07T15:30:00', 30, 'Meeting', confirmed=True)
     api.assert_not_called()
+
+
+def test_connection_diagnostic_does_not_expose_refresh_payload(monkeypatch):
+    import google_integration as g
+    from google.auth.exceptions import RefreshError
+    monkeypatch.setenv('DEMO_KEY','admin')
+    monkeypatch.setattr(g.store,'initialize',lambda:None)
+    def fail():raise RefreshError('invalid_grant: secret-token-must-not-be-returned')
+    monkeypatch.setattr(g,'fresh_credentials',fail)
+    import pytest
+    with pytest.raises(g.HTTPException):g.status('admin')
+    assert g.CONNECTION_STATUS=={'ok':False,'stage':'token_refresh','error':'invalid_grant','reconnect_required':True}

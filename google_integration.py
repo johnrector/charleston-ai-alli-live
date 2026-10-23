@@ -15,6 +15,7 @@ from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from google.auth.transport.requests import Request as GoogleRequest
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google.oauth2 import id_token
 from google_auth_oauthlib.flow import Flow
@@ -23,6 +24,7 @@ from tac.tools import function_tool
 import google_store as store
 
 TZ = ZoneInfo('America/New_York')
+CONNECTION_STATUS = {'ok':False,'stage':'not_checked'}
 SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email',
           'https://www.googleapis.com/auth/calendar.freebusy',
           'https://www.googleapis.com/auth/calendar.events.owned',
@@ -270,19 +272,30 @@ async def send_email(recipient_email: str, subject: str, body: str, confirmed: b
 @router.get('/google/status')
 def status(x_demo_key: str=Header(default='')):
     require_admin(x_demo_key)
+    global CONNECTION_STATUS
+    stage='token_refresh'
     try:
         store.initialize()
         creds=fresh_credentials()
+        stage='calendar_read'
         now=datetime.now(TZ)
         calendar=availability(now.isoformat(),(now+timedelta(hours=24)).isoformat())
+        stage='gmail_send_scope'
         # Gmail send-only scope cannot read the inbox/profile. Verify granted scope
         # via Google's token metadata, without sending any message.
         with httpx.Client(timeout=15) as client:
             tokeninfo=client.get('https://oauth2.googleapis.com/tokeninfo',params={'access_token':creds.token})
         info=tokeninfo.json() if tokeninfo.is_success else {}
         gmail_ok='https://www.googleapis.com/auth/gmail.send' in info.get('scope','').split()
-        return {'ok':calendar['ok'] and gmail_ok,'durable_token':True,'refresh_verified':True,'calendar_read_verified':calendar['ok'],'gmail_send_scope_verified':gmail_ok,'email_sent_during_check':False,'timezone':str(TZ)}
+        CONNECTION_STATUS={'ok':calendar['ok'] and gmail_ok,'stage':'ready' if gmail_ok else stage,'durable_token':True,'refresh_verified':True,'calendar_read_verified':calendar['ok'],'gmail_send_scope_verified':gmail_ok,'email_sent_during_check':False,'timezone':str(TZ)}
+        return dict(CONNECTION_STATUS)
+    except RefreshError as exc:
+        # Classify known OAuth codes without exposing exception/token payloads.
+        code=next((code for code in ('invalid_grant','invalid_client','invalid_scope') if code in str(exc)),'refresh_failed')
+        CONNECTION_STATUS={'ok':False,'stage':stage,'error':code,'reconnect_required':code=='invalid_grant'}
+        raise HTTPException(503,'Google connection not ready; check configuration and reconnect') from None
     except Exception:
+        CONNECTION_STATUS={'ok':False,'stage':stage,'error':'verification_failed'}
         raise HTTPException(503,'Google connection not ready; check configuration and reconnect') from None
 
 
