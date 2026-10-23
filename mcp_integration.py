@@ -303,14 +303,14 @@ def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_m
 
     if reminder_service is not None:
         @mcp.tool(title='Preview proactive appointment reminders',
-            description="Read Alli's proactive reminder policy and currently due candidates without sending. Reminders match approved contacts by a unique saved invitation email, recheck the live calendar, respect opt-outs and quiet hours, and deduplicate each event/contact. Default is one SMS two hours before a confirmed meeting, shifted to the prior evening for early meetings.",
+            description="Read Alli's proactive reminder policy and currently due candidates without sending. Reminders match approved contacts by a unique saved invitation email or a verified Alli booking receipt for that exact event, recheck the live calendar, respect opt-outs and quiet hours, and deduplicate each event/contact. Default is one SMS two hours before a confirmed meeting, shifted to the prior evening for early meetings.",
             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
             meta={'securitySchemes': SCHEMES})
         async def preview_appointment_reminders() -> dict:
             return await reminder_service.preview()
 
         @mcp.tool(title='Enable or disable proactive appointment reminders',
-            description="Change the cloud appointment-reminder policy only when John explicitly requests it. Enabling allows one automatic SMS to an approved uniquely matched meeting participant, two hours before each confirmed appointment, with an offer to help with directions/questions. Quiet hours are 8 PM–8 AM Eastern; early meetings get a prior-evening reminder. Does not enable automatic phone calls. Disabling suppresses unsent automatic reminders; manually authorized texts remain scheduled.",
+            description="Change the cloud appointment-reminder policy only when John explicitly requests it. Enabling allows one automatic SMS to an approved meeting participant matched by saved invitation email or exact-event booking receipt, two hours before each confirmed appointment, with an offer to help with directions/questions. Quiet hours are 8 PM–8 AM Eastern; early meetings get a prior-evening reminder. Does not enable automatic phone calls. Disabling suppresses unsent automatic reminders; manually authorized texts remain scheduled.",
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=True),
             meta={'securitySchemes': SCHEMES})
         async def configure_appointment_reminders(enabled: bool) -> dict:

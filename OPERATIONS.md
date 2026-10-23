@@ -244,7 +244,7 @@ SMS tools, and the owner-key `/appointment-reminders` GET/POST routes provide
 preview/control. A cloud worker scans every five minutes while enabled.
 
 Default: one SMS two hours before a confirmed timed meeting, for a participant
-whose invitation email identifies exactly one approved saved phone. Contact
+whose invitation email identifies exactly one approved saved phone, or whose exact event has a verified Alli booking receipt bound to that approved phone. Contact
 opt-outs, declined invitations, all-day/transparent events, incomplete attendee
 lists, ambiguous numbers and unmatched emails suppress dispatch. The event must
 be John's own event or one he accepted. No phone/name is inferred from an event
@@ -260,8 +260,7 @@ Changed/cancelled events cannot send a stale queued reminder. Replies retain
 the outgoing text context; Alli uses existing own-meeting lookup tools and
 records factual confirmations/questions for John. `STOP REMINDERS` and
 `START REMINDERS` update only the sender's preference. General Twilio STOP
-remains enforced by the carrier/provider. A missing saved invitation email
-means the owner needs to add that email before automatic matching can work.
+remains enforced by the carrier/provider. A contact without a saved invitation email can still receive reminders for meetings they book through Alli: the successful business-tool receipt binds that exact event to their phone, without claiming their supplied email identifies them across unrelated calendar events. Other meetings need an owner-saved invitation email for automatic matching.
 
 This feature enables proactive SMS only. Existing automatic-call policy and
 switches remain independent. Failed/uncertain sends are not blindly retried or

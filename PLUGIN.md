@@ -333,5 +333,4 @@ one timely reminder, and offers help with directions/questions. Use
 `configure_appointment_reminders` for an explicit owner enable/disable request.
 Default is two hours before a confirmed meeting, with 8 PM–8 AM Eastern quiet
 hours, recipient opt-outs, fresh calendar checks and durable deduplication.
-Do not claim every saved phone can match automatically: contacts need a saved
-invitation email. This does not activate automatic calls.
+Do not claim every saved phone can match every calendar event automatically: use a saved invitation email or a verified Alli booking receipt binding that exact event to the approved phone. This does not activate automatic calls.

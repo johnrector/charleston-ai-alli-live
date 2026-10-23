@@ -11,6 +11,10 @@ from test_inbound import service, CALLER
 NOW=datetime(2026,10,23,10,30,tzinfo=reminders.TZ)
 PERSON=dict(phone=CALLER,name='Jane Doe',email='jane@example.com')
 
+@pytest.fixture(autouse=True)
+def no_real_booking_reads(monkeypatch):
+    monkeypatch.setattr(reminders,'booked_contacts',lambda *a:{})
+
 
 def event(**changes):
     return {**dict(id='meeting-1',status='confirmed',organizer={'self':True},
@@ -42,6 +46,15 @@ def test_one_deterministic_reminder_offers_questions_and_verified_directions(mon
     assert reminders.candidates(NOW+timedelta(minutes=10))[0]['request_id']==result['request_id']
     assert reminders.candidates(NOW-timedelta(seconds=1))==[]
     assert reminders.candidates(NOW+timedelta(minutes=16))==[]
+
+
+def test_verified_booking_receipt_matches_only_its_event_without_a_saved_email(monkeypatch):
+    monkeypatch.setattr(reminders,'contacts',lambda:{})
+    monkeypatch.setattr(reminders,'booked_contacts',lambda *a:{'meeting-1':[dict(PERSON,booking_receipt=True)]})
+    monkeypatch.setattr(reminders,'upcoming',lambda _:[event(),event(id='unrelated-meeting')])
+    result=reminders.candidates(NOW)
+    assert len(result)==1 and result[0]['event_id']=='meeting-1'
+    assert result[0]['booking_receipt']
 
 
 @pytest.mark.parametrize('hour,expected_day,expected_hour',[(8,22,18),(10,23,8),(23,23,19)])
