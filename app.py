@@ -17,6 +17,7 @@ from tac.models.outbound import InitiateVoiceConversationOptionsGPTLive
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from google_integration import router as google_router, check_calendar, create_meeting, send_email
+from public_pages import router as public_router
 
 FOREGROUND = """You are Alli, John Rector's AI assistant with Charleston AI, calling on his behalf.
 John is the principal requesting the call; the recipient is the person you are calling. Do not confuse them.
@@ -57,6 +58,7 @@ logging.getLogger('httpx').setLevel(logging.WARNING)
 logging.getLogger('httpcore').setLevel(logging.WARNING)
 app = FastAPI()
 app.include_router(google_router)
+app.include_router(public_router)
 
 class DemoCall(BaseModel):
     to: str = Field(pattern=r"^\+[1-9]\d{7,14}$")

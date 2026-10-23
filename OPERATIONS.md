@@ -113,6 +113,13 @@ contracts. Live owner testing additionally verifies the deployed commit, durable
 claim/result readback, signed media/callback routing and provider disposition.
 
 The Google refresh token may expire after seven days in Google testing mode.
+Public consent-screen app information is served at `/` and the Alli-specific
+privacy disclosure at `/privacy`. These static pages do not expose account data,
+tokens or administration. Keep the Google Branding URLs on this same authorized
+service domain. Publishing status is managed in Google Auth Platform Audience;
+it is independent of Google verification and must not be inferred from a working
+refresh token. Renew consent after changing from Testing to Production, then
+verify encrypted durable storage, forced refresh, Calendar read and Gmail scope.
 The existing free Render database expires October 28, 2026. Upgrade/migrate requires
 owner approval and is not part of this change. The legacy Node sibling currently
 fails on a pre-existing `AgentConnect` export error; the Python service is the
