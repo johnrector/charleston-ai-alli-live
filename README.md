@@ -4,7 +4,7 @@ Persistent Twilio Agent Connect service for general-purpose, mission-driven outb
 
 Architecture:
 
-Twilio Agent Connect → OpenAI GPT-Live-1 → delegated reasoning with GPT-6 Astra (high effort).
+Twilio Agent Connect → OpenAI GPT-Live-1 → delegated reasoning with GPT-6.1 Sol (high effort).
 
 The private owner dashboard is `/dashboard` on the existing Render service.
 Sign in with the one-time code sent to the configured owner phone. Overview,

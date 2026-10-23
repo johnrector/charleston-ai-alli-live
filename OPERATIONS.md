@@ -310,7 +310,7 @@ cancels an unclaimed outbox item atomically; an already claimed send cannot be
 recalled. Optimistic revisions prevent stale dashboard answers from overwriting
 new work. Per-intent IDs and open-question matching prevent duplicate handoffs.
 
-Reasoning uses `reasoning_config.py`: GPT-6 Astra, high effort. This applies to
+Reasoning uses `reasoning_config.py`: GPT-6.1 Sol, high effort. This applies to
 SMS reasoning, GPT-Live's delegated Responses backend and contextual reminder
 wording. The voice layer remains GPT-Live-1 with its current audio configuration.
 Startup verifies both model routes. Reminder wording adds at most one contextually

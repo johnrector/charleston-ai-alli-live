@@ -360,7 +360,7 @@ The reminder worker reads the bound contact's own calendar/conversation context
 and drafts one useful optional question; verified appointment facts, permissions,
 quiet hours, opt-outs and send deduplication remain enforced by code.
 
-The selected reasoning backend is GPT-6 Astra with high reasoning for text,
+The selected reasoning backend is GPT-6.1 Sol with high reasoning for text,
 contextual drafts and delegated call actions. Keep the existing GPT-Live voice
 layer. Current official model guidance and live project probes were checked
 before selecting this combination. Further upgrades still follow the policy at
