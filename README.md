@@ -4,7 +4,19 @@ Persistent Twilio Agent Connect service for general-purpose, mission-driven outb
 
 Architecture:
 
-Twilio Agent Connect → OpenAI GPT-Live-1 → delegated reasoning with GPT-5.6 Sol.
+Twilio Agent Connect → OpenAI GPT-Live-1 → delegated reasoning with GPT-6 Astra (high effort).
+
+The private owner dashboard is `/dashboard` on the existing Render service.
+Sign in with the one-time code sent to the configured owner phone. Overview,
+Promises and People show current calendar entries, approvals, durable questions/
+tasks, approved scheduled texts and actual send receipts. All work and sessions
+persist in Render Postgres and continue when the owner’s Mac is off.
+
+Saved friends can leave a question for John by call or text; only John can supply
+the answer. Owner SMS supports `list_open_promises`, `answer_promise`, and
+`ANSWER <promise ID> <exact answer>`. Contextual reminder drafts use the same high
+reasoning model to choose a useful question from the person’s own conversation
+and calendar context. See the October 23 dashboard section in `OPERATIONS.md`.
 
 Each conversation receives John's identity, Eastern Time, the recipient, and the current approved mission. No property facts or fixed demo script are built in.
 
