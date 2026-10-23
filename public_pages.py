@@ -13,6 +13,7 @@ a:focus-visible{outline:3px solid #ad6000;outline-offset:4px}'''
 def page(title, body):
     return HTMLResponse(f'''<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} | Charleston AI Alli</title>
+<meta name="google-site-verification" content="0qGZPAa2YPcG4GqaHw0GtuXboqOjKs7reVmG-8H-D7k">
 <meta name="description" content="Alli, John Rector’s personal AI assistant with Charleston AI. App information and privacy.">
 <style>{STYLE}</style></head><body><main><nav aria-label="Main"><a href="/">Charleston AI Alli</a><a href="/privacy">Privacy</a></nav>
 {body}<footer><small>Charleston AI Alli · John Rector<br>Questions: <a href="mailto:jsrector@gmail.com">jsrector@gmail.com</a></small></footer>
