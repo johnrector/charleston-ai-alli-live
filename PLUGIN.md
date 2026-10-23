@@ -234,3 +234,55 @@ and voicemail timeout remain as deployed. Roll back with a revert of this releas
 the added email column and seeded directory rows are compatible with the prior
 code, though the prior identity loop would return. No calls/messages/calendar
 changes are made merely by deploying or running the mocked regression suite.
+
+## Conversational availability — October 23, 2026
+
+On both saved-contact calls and texts, answer exact-time questions with
+`check_meeting_time`, which returns an explicit yes/no for the entire interval.
+When no duration is given, check one hour and say so. Resolve weekday dates from
+current Eastern time and say the actual date. Never answer from remembered
+availability, infer a conflict from missing office-hour suggestions, or request
+an invitation email before answering a simple availability question. If busy,
+offer verified alternatives without disclosing event titles, attendees or busy
+blocks. Use `check_calendar` for broad windows and follow-up changes.
+
+An availability inquiry is not a booking instruction. Once the recipient asks
+to reserve the time and the date/time/duration/email are known, use the existing
+meeting tool, which rechecks conflicts before writing. Preserve conversation
+context and do not restart identity confirmation. Claim booked only after the
+verified event ID.
+
+The current cloud source is John's Google primary calendar, also displayed in
+Apple Calendar. Separate iCloud calendars are not included. An iCloud Calendar
+integration is available but was not connected during this release; native Mac
+Calendar visibility is not a cloud authorization for the Render service.
+
+Only saved/pre-approved contacts may check availability and book. New callers
+and texters should hear: “Since you're not on John's pre-approved list, I'll
+need his approval before I commit to a time.” Collect their name, contact
+information and preferred date/time, save the request for John's review, and
+continue naturally without an identity loop. Do not claim John was contacted,
+promise a response time, or approve the request yourself.
+
+## Apple Favorites seed — October 23, 2026
+
+The initial Apple Phone Favorites snapshot contains 50 favorite actions, which
+consolidate to 48 phone numbers. Import through `import_apple_favorites` using
+an owner-authorized snapshot. The atomic merge validates all rows before writing,
+normalizes numbers, rejects conflicting names, preserves explicit owner-saved
+corrections, and verifies the resulting rows. Source `apple_favorite` is a
+pre-approved contact on both voice and SMS. Existing saved contacts are retained.
+Do not commit the private snapshot to the repository.
+
+Twenty-five numbers have display names; twenty-three favorite entries show
+only numbers. Those numbers still have standing appointment access and get a
+generic greeting. Obtain an explicit name once before booking or accessing
+personal meetings, remember it while retaining the approved Favorite source,
+and use that name in the current conversation's action tools.
+
+This is an initial seed, not continuous Apple synchronization. A later owner
+request to refresh from Apple Favorites should obtain a complete fresh snapshot
+through the Phone UI (including call and message entries), then merge it through
+the same import function. Removing a favorite does not automatically revoke an
+existing approved contact. Owner SMS `save_friend_contact` remains available for
+individual additions or corrections without editing a database table.

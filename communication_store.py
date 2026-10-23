@@ -77,8 +77,11 @@ def remember_name(phone, name):
     initialize()
     with connection() as db:
         db.execute("""INSERT INTO alli_contact_name(phone,name,source) VALUES(%s,%s,'self_introduced')
-            ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name,source=EXCLUDED.source,updated_at=now()
-            WHERE alli_contact_name.source='self_introduced'""",(phone,name))
+            ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name,
+                source=CASE WHEN alli_contact_name.source='apple_favorite' THEN 'apple_favorite' ELSE EXCLUDED.source END,
+                updated_at=now()
+            WHERE alli_contact_name.source='self_introduced'
+                OR (alli_contact_name.source='apple_favorite' AND alli_contact_name.name='')""",(phone,name))
     return True
 
 def context_for(phone):
@@ -96,7 +99,7 @@ def context_for(phone):
         matched = rows[0][0] if rows and len(names)==1 and not owner else None
         contact=db.execute('SELECT name,source,email FROM alli_contact_name WHERE phone=%s',(phone,)).fetchone()
         if owner:contact=('John Rector','owner_configured')
-        elif contact and contact[1]=='owner_saved_contact':pass
+        elif contact and contact[1] in ('owner_saved_contact','apple_favorite'):pass
         elif len(names)>1:contact=None
         elif greeting_rows and len(names)==1:
             contact=(greeting_rows[0][0]['recipient_name'],'owner_supplied_mission',greeting_rows[0][0].get('email',''))
@@ -122,6 +125,41 @@ def save_contact(phone, name, email=''):
             VALUES(%s,%s,'owner_saved_contact',%s) ON CONFLICT(phone) DO UPDATE SET
             name=EXCLUDED.name,source=EXCLUDED.source,email=EXCLUDED.email,updated_at=now()""",(phone,name,email))
     return {'ok':True,'phone':phone,'name':name,'email':email}
+
+def import_apple_favorites(entries):
+    """Merge an owner-authorized UI/export snapshot; no background Mac access."""
+    if not isinstance(entries,list) or not 1<=len(entries)<=5000:
+        raise ValueError('Supply a nonempty Favorites snapshot of at most 5000 entries')
+    from google_integration import email_address
+    prepared={}
+    for entry in entries:
+        phone=normalize_phone(entry.get('phone',''))
+        name=' '.join(entry.get('name','').strip().split())
+        email=entry.get('email','')
+        if not phone or len(name)>100 or any(c in name for c in '<>'):
+            raise ValueError('Favorites need valid phone numbers and optional names up to 100 characters')
+        if email:email_address(email)
+        previous=prepared.get(phone)
+        if previous and previous['name'] and name and previous['name'].casefold()!=name.casefold():
+            raise ValueError('A favorite number has conflicting names; resolve it before import')
+        prepared[phone]={'name':name or (previous or {}).get('name',''),'email':email or (previous or {}).get('email','')}
+    initialize()
+    with connection() as db:
+        db.execute('SELECT pg_advisory_xact_lock(301849630156)')
+        for phone,entry in prepared.items():
+            db.execute("""INSERT INTO alli_contact_name(phone,name,source,email)
+                VALUES(%s,%s,'apple_favorite',%s) ON CONFLICT(phone) DO UPDATE SET
+                name=CASE WHEN alli_contact_name.source='owner_saved_contact' THEN alli_contact_name.name
+                          ELSE coalesce(nullif(EXCLUDED.name,''),alli_contact_name.name) END,
+                email=CASE WHEN alli_contact_name.source='owner_saved_contact' AND alli_contact_name.email<>'' THEN alli_contact_name.email
+                           ELSE coalesce(nullif(EXCLUDED.email,''),alli_contact_name.email) END,
+                source=CASE WHEN alli_contact_name.source='owner_saved_contact' THEN 'owner_saved_contact' ELSE 'apple_favorite' END,
+                updated_at=now()""",(phone,entry['name'],entry['email']))
+        rows=db.execute('SELECT phone,name,source,email FROM alli_contact_name WHERE phone=ANY(%s)',(list(prepared),)).fetchall()
+        if {r[0] for r in rows}!=set(prepared) or any(r[2] not in ('apple_favorite','owner_saved_contact') for r in rows):
+            raise ValueError('Favorites import could not be verified')
+    return {'ok':True,'imported_numbers':len(rows),'with_name':sum(bool(r[1]) for r in rows),
+            'without_name':sum(not bool(r[1]) for r in rows),'automatic_sync':False}
 
 def receive(sid, phone, channel, body='', context=None):
     initialize()

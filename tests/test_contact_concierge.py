@@ -124,3 +124,87 @@ def test_both_channels_start_identified_and_can_book(monkeypatch,channel):
         assert 'OPENING: Hi Jane' in session['instructions']
         assert (await reg['create_meeting'](start_datetime='2026-11-02T13:00:00-05:00',duration_minutes=60,title='Meeting with John',recipient_email_address='jane@example.com',confirmed=True))['event_id']=='booked'
     asyncio.run(run())
+
+@pytest.mark.parametrize('start',["2030-01-04T11:00:00-05:00","2030-01-05T19:00:00-05:00"])
+def test_exact_time_free_even_without_office_hour_suggestions(monkeypatch,start):
+    lookup=Mock(return_value={'ok':True,'busy':[],'suggested_slots':[]})
+    monkeypatch.setattr(g,'availability',lookup)
+    result=cc.meeting_time(start)
+    assert result['available'] is True and result['duration_minutes']==60
+    assert result['end']==g.local_time(start).replace(hour=g.local_time(start).hour+1).isoformat()
+    assert 'busy' not in result and lookup.call_count==1
+
+
+def test_partial_conflict_returns_no_and_safe_alternatives(monkeypatch):
+    lookup=Mock(side_effect=[
+        {'ok':True,'busy':[{'start':'2030-01-04T11:30:00-05:00','end':'2030-01-04T12:30:00-05:00'}]},
+        {'ok':True,'suggested_slots':[{'start':'2030-01-04T12:30:00-05:00','end':'2030-01-04T13:30:00-05:00'}]}])
+    monkeypatch.setattr(g,'availability',lookup)
+    result=cc.meeting_time('2030-01-04T11:00:00-05:00')
+    assert result['available'] is False and len(result['alternatives'])==1
+    assert '11:30' not in str(result) and 'busy' not in result
+
+
+def test_conflict_at_boundary_does_not_block_adjacent_meeting(monkeypatch):
+    monkeypatch.setattr(g,'availability',lambda *a:{'ok':True,'busy':[{'start':'2030-01-04T10:00:00-05:00','end':'2030-01-04T11:00:00-05:00'}]})
+    assert cc.meeting_time('2030-01-04T11:00:00-05:00')['available']
+
+
+def test_failed_calendar_check_is_never_a_yes(monkeypatch):
+    monkeypatch.setattr(g,'availability',lambda *a:{'ok':False})
+    result=asyncio.run(cc.meeting_time_tool()(start_datetime='2030-01-04T11:00:00-05:00'))
+    assert not result['ok'] and 'available' not in result
+
+
+def test_alternative_lookup_failure_preserves_no(monkeypatch):
+    lookup=Mock(side_effect=[{'ok':True,'busy':[{'start':'2030-01-04T11:30:00-05:00','end':'2030-01-04T12:30:00-05:00'}]},g.GoogleError('failed')])
+    monkeypatch.setattr(g,'availability',lookup)
+    result=cc.meeting_time('2030-01-04T11:00:00-05:00')
+    assert result['available'] is False and result['alternatives_unavailable']
+
+
+@pytest.mark.parametrize('duration',[0,True,481,'60'])
+def test_invalid_exact_duration_never_reads_calendar(monkeypatch,duration):
+    api=Mock();monkeypatch.setattr(g,'availability',api)
+    with pytest.raises(ValueError):cc.meeting_time('2030-01-04T11:00:00-05:00',duration)
+    api.assert_not_called()
+
+
+@pytest.mark.parametrize('start,end',[('2030-11-03T01:30:00-04:00','2030-11-03T01:30:00-05:00'),('2030-03-10T01:30:00-05:00','2030-03-10T03:30:00-04:00')])
+def test_exact_duration_is_elapsed_across_dst(monkeypatch,start,end):
+    monkeypatch.setattr(g,'availability',lambda *a:{'ok':True,'busy':[]})
+    assert cc.meeting_time(start)['end']==end
+
+
+@pytest.mark.parametrize('channel',['sms','voice'])
+def test_exact_time_tool_available_on_both_contact_channels(channel):
+    session,tools=asyncio.run(inbound.build_session(BASE,CONTACT,SID,CALLER,channel,Memory()))
+    assert 'check_meeting_time' in {t.name for t in tools}
+    assert 'An availability question is not permission to book' in session['instructions']
+
+@pytest.mark.parametrize('channel',['sms','voice'])
+def test_new_contacts_require_john_approval_and_have_no_calendar_tools(channel):
+    session,tools=asyncio.run(inbound.build_session(BASE,{},SID,CALLER,channel,Memory()))
+    assert not {'check_meeting_time','check_calendar','create_meeting','find_meetings'} & {t.name for t in tools}
+    assert "Since you're not on John's pre-approved list" in session['instructions']
+    assert 'save the request with report_call_outcome' in session['instructions']
+
+@pytest.mark.parametrize('channel',['sms','voice'])
+def test_unnamed_favorite_can_check_then_introduce_and_book(monkeypatch,channel):
+    context={'contact':{'name':'','source':'apple_favorite','email':'','is_owner':False},'history':[]}
+    memory=Memory();memory.remember_name=Mock(return_value=True);memory.action_result=Mock()
+    sender=AsyncMock(return_value={'ok':True,'event_id':'named-booking'})
+    monkeypatch.setattr(g,'create_meeting',sender)
+    monkeypatch.setattr(g,'availability',lambda *a:{'ok':True,'busy':[]})
+    async def run():
+        session,tools=await inbound.build_session(BASE,context,SID,CALLER,channel,memory)
+        reg={t.name:t for t in tools}
+        assert "OPENING: Hi, this is Alli" in session['instructions']
+        assert '"identity_confirmed": true' in session['instructions']
+        assert (await reg['check_meeting_time'](start_datetime='2030-01-04T11:00:00-05:00'))['available']
+        args=dict(start_datetime='2030-01-04T11:00:00-05:00',duration_minutes=60,title='Meeting',recipient_email_address='jane@example.com',confirmed=True)
+        assert not (await reg['create_meeting'](**args))['ok']
+        assert (await reg['remember_contact_name'](name='Jane Doe'))['ok']
+        assert (await reg['create_meeting'](**args))['event_id']=='named-booking'
+        assert sender.await_args.kwargs['attendee_name']=='Jane Doe'
+    asyncio.run(run())

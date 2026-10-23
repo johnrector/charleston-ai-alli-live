@@ -68,3 +68,29 @@ def test_owner_saved_number_normalizes_and_persists_optional_email(monkeypatch):
     result=store.save_contact('8435550100','Jane Doe','jane@example.com')
     assert result['phone']=='+18435550100'
     assert db.execute.call_args.args[1]==('+18435550100','Jane Doe','jane@example.com')
+
+
+def test_apple_favorite_is_authoritative_even_without_name(monkeypatch):
+    jane={'recipient_name':'Old Contact'}
+    result=lookup(monkeypatch,[(jane,{})],[(jane,),({'recipient_name':'Other Contact'},)],('','apple_favorite',''))
+    assert result['contact']['source']=='apple_favorite' and result['contact']['name']==''
+
+
+def test_import_rejects_conflicting_names_before_writing(monkeypatch):
+    db=Mock();monkeypatch.setattr(store,'initialize',db)
+    import pytest
+    with pytest.raises(ValueError,match='conflicting'):
+        store.import_apple_favorites([{'phone':'8435550100','name':'Jane'},{'phone':'+18435550100','name':'Bill'}])
+    db.assert_not_called()
+
+
+def test_favorites_import_deduplicates_call_message_and_verifies(monkeypatch):
+    monkeypatch.setattr(store,'initialize',lambda:None)
+    db=Mock();db.execute.return_value.fetchall.return_value=[('+18435550100','Jane','apple_favorite','jane@example.com')]
+    @contextmanager
+    def connection():yield db
+    monkeypatch.setattr(store,'connection',connection)
+    result=store.import_apple_favorites([{'phone':'8435550100','name':'Jane','email':'jane@example.com'},{'phone':'+18435550100','name':'Jane'}])
+    assert result=={'ok':True,'imported_numbers':1,'with_name':1,'without_name':0,'automatic_sync':False}
+    inserts=[c for c in db.execute.call_args_list if 'INSERT INTO' in c.args[0]]
+    assert len(inserts)==1 and inserts[0].args[1]==('+18435550100','Jane','jane@example.com')
