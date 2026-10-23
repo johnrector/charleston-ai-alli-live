@@ -10,11 +10,25 @@ function badge(status){return node('span',labels[status]||status,'badge '+status
 async function api(path,body){const options={credentials:'same-origin',headers:{'Content-Type':'application/json'}};if(body!==undefined){options.method='POST';options.body=JSON.stringify(body);options.headers['X-CSRF-Token']=csrf;}
  const response=await fetch('/dashboard/api/'+path,options);let data;try{data=await response.json();}catch{throw Error('Alli could not complete this request. Refresh and try again.');}
  if(!response.ok){if(response.status===401&&path!=='verify')showLogin();throw Error(typeof data.detail==='string'?data.detail:'Please check the supplied details.');}if(data.ok===false)throw Error(data.error||'The action could not be verified.');return data;}
-function showLogin(){$('workspace').hidden=true;$('login').hidden=false;state=null;csrf='';}
+const welcomeVideo=$('welcome-video'),motionButton=$('welcome-motion'),motionPreference=matchMedia('(prefers-reduced-motion: reduce)');
+let motionPaused=false;
+function pauseWelcome(){welcomeVideo.pause();welcomeVideo.classList.remove('is-playing');motionButton.textContent='Play welcome video';}
+async function playWelcome(userInitiated=false){
+ if($('login').hidden||document.hidden||motionPreference.matches||motionPaused||(!userInitiated&&navigator.connection?.saveData))return;
+ const source=welcomeVideo.querySelector('source');
+ if(!source.src){source.src=source.dataset.src;welcomeVideo.load();}
+ try{await welcomeVideo.play();if($('login').hidden||document.hidden||motionPaused||motionPreference.matches)pauseWelcome();}catch{pauseWelcome();}
+}
+welcomeVideo.addEventListener('playing',()=>{if(!$('login').hidden&&!motionPreference.matches&&!motionPaused){welcomeVideo.classList.add('is-playing');motionButton.textContent='Pause motion';}});
+welcomeVideo.addEventListener('error',pauseWelcome);
+motionButton.onclick=()=>{if(!welcomeVideo.paused){motionPaused=true;pauseWelcome();}else{motionPaused=false;playWelcome(true);}};
+motionPreference.addEventListener('change',()=>{motionButton.hidden=motionPreference.matches;if(motionPreference.matches)pauseWelcome();else playWelcome();});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseWelcome();else if(!$('login').hidden)playWelcome();});
+function showLogin(){$('workspace').hidden=true;$('login').hidden=false;state=null;csrf='';motionButton.hidden=motionPreference.matches;if(!navigator.connection?.saveData)playWelcome();}
 function item(title,detail,status){const box=node('div','','item'),top=node('div','','item-top');top.append(node('strong',title));if(status)top.append(badge(status));box.append(top);if(detail)box.append(node('p',detail));return box;}
 function empty(target,text){target.append(node('p',text,'empty'));}
 function setView(name){view=name;for(const key of ['overview','promises','people'])$(key+'-view').hidden=key!==name;document.querySelectorAll('[data-view]').forEach(e=>e.classList.toggle('active',e.dataset.view===name));$('view-title').textContent={overview:'A clear head starts here.',promises:'Every promise has a place.',people:'Your people, remembered.'}[name];}
-async function refresh(){const data=await api('data');state=data;$('status').textContent='';$('login').hidden=true;$('workspace').hidden=false;render();}
+async function refresh(){const data=await api('data');state=data;$('status').textContent='';$('login').hidden=true;pauseWelcome();$('workspace').hidden=false;render();}
 function render(){if(!state)return;const open=state.promises.filter(p=>openStates.includes(p.state));const needs=open.filter(p=>p.state==='needs_john'||p.state==='blocked');const count=needs.length+state.approvals.length+state.attention.length;
  $('today-label').textContent=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'long',month:'long',day:'numeric'}).format(new Date()).toUpperCase()+' / EASTERN';
  $('nav-count').textContent=open.length;$('attention-count').textContent=count;

@@ -162,14 +162,14 @@ def install_dashboard(app,communications,reminders,worker):
         if request.url.path.startswith('/dashboard'):
             response.headers.update({'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow',
                 'Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY',
-                'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"})
+                'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; media-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"})
         return response
 
     @app.get('/dashboard',include_in_schema=False)
     async def page(): return FileResponse(STATIC/'index.html')
     @app.get('/dashboard/assets/{filename}',include_in_schema=False)
     async def assets(filename:str):
-        if filename not in ('dashboard.js','dashboard.css'): raise HTTPException(404)
+        if filename not in ('dashboard.js','dashboard.css','alli-portrait.png','alli-welcome.mp4'): raise HTTPException(404)
         return FileResponse(STATIC/filename)
     @app.post('/dashboard/api/login')
     async def login():
