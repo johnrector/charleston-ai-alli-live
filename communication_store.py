@@ -32,6 +32,8 @@ def initialize():
                 PRIMARY KEY(phone,request_id))''')
             db.execute('''CREATE TABLE IF NOT EXISTS alli_contact_name (phone text PRIMARY KEY, name text NOT NULL, source text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())''')
             db.execute("ALTER TABLE alli_contact_name ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT ''")
+            from contact_approvals import initialize as initialize_approvals
+            initialize_approvals(db)
             # Preserve owner-supplied contacts independently of mission expiry. Shared
             # numbers with conflicting names are deliberately not auto-approved.
             db.execute(r"""INSERT INTO alli_contact_name(phone,name,source,email)
@@ -78,10 +80,10 @@ def remember_name(phone, name):
     with connection() as db:
         db.execute("""INSERT INTO alli_contact_name(phone,name,source) VALUES(%s,%s,'self_introduced')
             ON CONFLICT(phone) DO UPDATE SET name=EXCLUDED.name,
-                source=CASE WHEN alli_contact_name.source='apple_favorite' THEN 'apple_favorite' ELSE EXCLUDED.source END,
+                source=CASE WHEN alli_contact_name.source IN ('apple_favorite','owner_saved_contact') THEN alli_contact_name.source ELSE EXCLUDED.source END,
                 updated_at=now()
             WHERE alli_contact_name.source='self_introduced'
-                OR (alli_contact_name.source='apple_favorite' AND alli_contact_name.name='')""",(phone,name))
+                OR (alli_contact_name.source IN ('apple_favorite','owner_saved_contact') AND alli_contact_name.name='')""",(phone,name))
     return True
 
 def context_for(phone):
@@ -167,6 +169,9 @@ def receive(sid, phone, channel, body='', context=None):
         row = db.execute('''INSERT INTO alli_inbound(sid,phone,channel,status,body,context)
             VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(sid) DO NOTHING RETURNING sid''',
             (sid,phone,channel,'queued' if channel=='sms' else 'active',body,Jsonb(context or {}))).fetchone()
+        if row:
+            from contact_approvals import enqueue
+            enqueue(db,sid,phone,channel)
     return bool(row)
 
 def get(sid):

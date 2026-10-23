@@ -198,6 +198,9 @@ class InboundCommunications:
         transcript=[{'role':t.get('role'),'text':str(t.get('text',''))[:4000]} for t in session.metadata.get('transcript',[])[-100:] if t.get('role') in ('user','assistant')]
         await asyncio.to_thread(self.store.finish,sid,'completed',transcript=transcript)
     async def sms_answer(self,row,client=None):
+        from contact_approvals import command
+        decision=await asyncio.to_thread(command,row['phone'],row['body'])
+        if decision is not None:return decision
         from openai import AsyncOpenAI
         context=await asyncio.to_thread(self.store.context_for,row['phone'])
         session,registry=await build_session(self.base,context,row['sid'],row['phone'],'sms',self.store,owner_text='\n'.join([str(h.get('body','')) for h in context.get('history',[]) if h.get('channel')=='sms']+[row['body']]))
@@ -236,6 +239,18 @@ class InboundCommunications:
         except Exception:
             log.exception('inbound_sms_processing_failed sid=%s',row['sid'])
             await asyncio.to_thread(self.store.finish,row['sid'],'uncertain')
+    async def process_approval_alert(self):
+        import contact_approvals as approvals
+        alert=await asyncio.to_thread(approvals.claim)
+        if not alert:return
+        try:
+            sent=await asyncio.to_thread(self.client().messages.create,to=alert['owner'],from_=self.tac.config.phone_number,
+                body=alert['body'],status_callback=f'https://{self.domain}/inbound/approval-status/{alert["code"]}')
+            await asyncio.to_thread(approvals.sent,alert['code'],sent.sid)
+        except Exception:
+            log.error('contact_approval_alert_uncertain code=%s',alert['code'])
+            await asyncio.to_thread(approvals.sent,alert['code'],uncertain=True)
+
     async def verify_models(self):
         """Check live credentials/protocol without a phone call or business action."""
         import websockets
@@ -268,7 +283,8 @@ class InboundCommunications:
                 await asyncio.to_thread(self.store.recover_stale)
                 row=await asyncio.to_thread(self.store.claim_sms)
                 if row:await self.process_sms(row)
-                else:await asyncio.sleep(2)
+                await self.process_approval_alert()
+                if not row:await asyncio.sleep(2)
             except asyncio.CancelledError:raise
             except Exception:
                 log.error('inbound_sms_worker_failed')
@@ -361,6 +377,14 @@ class InboundCommunications:
             if status in ('delivered','undelivered','failed'):
                 # Only callbacks for our stored outbound message can update its delivery state.
                 await asyncio.to_thread(self.store.delivery,sid,str(form.get('MessageSid','')),status)
+            return Response('<Response/>',media_type='text/xml')
+        @app.post('/inbound/approval-status/{code}',dependencies=[Depends(http_sig)])
+        async def approval_status(code:str,request:Request):
+            import contact_approvals as approvals
+            form=await request.form()
+            if form.get('AccountSid')!=self.tac.config.account_sid:raise HTTPException(403)
+            await asyncio.to_thread(approvals.delivery,code,str(form.get('MessageSid','')),
+                str(form.get('MessageStatus','')),str(form.get('To','')))
             return Response('<Response/>',media_type='text/xml')
         original=app.router.lifespan_context
         @asynccontextmanager

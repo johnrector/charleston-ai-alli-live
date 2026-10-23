@@ -286,3 +286,25 @@ through the Phone UI (including call and message entries), then merge it through
 the same import function. Removing a favorite does not automatically revoke an
 existing approved contact. Owner SMS `save_friend_contact` remains available for
 individual additions or corrections without editing a database table.
+
+## New-contact approval by SMS
+
+New incoming callers and texters queue one durable approval alert per phone
+number to `ALLI_OWNER_PHONE`. Existing approved contacts, the owner, hidden caller
+IDs and Twilio opt-out control messages do not trigger alerts. Voice waits until
+the interaction ends or two minutes; SMS normally waits until its response is
+processed so introductions and request previews can appear in the alert.
+
+John replies `APPROVE <8-character code>` (optional contact name after the code)
+or `DENY <code>` to Alli. Exact commands in the current signed SMS from John's
+configured phone are parsed before the model. Quoted caller text, conversation
+history, a bare "yes", or someone else's phone cannot approve a request. Approval
+atomically saves the number as `owner_saved_contact`; the next call or text gets
+saved-contact assistance. An unnamed approved number may check availability,
+but must introduce themselves before booking. Denial leaves the number unapproved
+and suppresses repeat approval alerts. Saving a contact separately still works.
+
+Notifications persist a sending state before dispatch, track signed delivery
+callbacks, and never blindly retry uncertain sends. Failures are recorded in the
+owner communication feed. Approval is not a booking and does not send an extra
+message to the new contact or change a calendar event.

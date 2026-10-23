@@ -180,3 +180,21 @@ Saved numbers are already identified for these routine phone interactions.
 Do not request a second name/returning-call confirmation. Agreement to an actual
 appointment or reminder is still required. SMS uses the existing Responses
 model; voice uses the existing GPT-Live and delegated tools.
+
+## New-contact approval alerts
+
+`alli_contact_approval` holds one pending/approved/denied request per normalized
+phone, a random reply code, the source inbound SID and an independent notification
+delivery state. The existing inbound worker sends alerts only to the configured
+owner. No extra scheduler or Mac is involved. New inbound receipts create requests
+atomically; webhook retries cannot create duplicate alerts. No historical backfill
+is performed. Denied numbers stay unapproved without repeated alerts.
+
+Use exact `APPROVE code [name]` or `DENY code` SMS replies from the configured
+owner. The deterministic parser bypasses the model and verifies the saved row
+before claiming approval. A pending request cannot revoke a separately approved
+contact. Approval applies to subsequent conversations. Alert delivery callbacks
+use `/inbound/approval-status/{code}` and require the Twilio signature, account,
+stored destination and matching message SID. A process interruption or send timeout
+leaves an uncertain state for review, never an automatic duplicate send. The new
+schema is additive and compatible with rollback to the prior application version.
