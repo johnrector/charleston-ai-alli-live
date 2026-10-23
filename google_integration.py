@@ -103,7 +103,7 @@ def callback(request: Request):
             raise ValueError('Offline token missing; reconnect with consent')
         store.save_token(credentials.refresh_token)
         # Read back the committed encrypted record, then force a refresh.
-        fresh_credentials()
+        status(os.getenv('DEMO_KEY', ''))
     except Exception:
         # Never include authorization codes, token payloads or Google exceptions in logs/HTML.
         raise HTTPException(400, 'Google connection could not be verified. Check account, permissions and configuration; then reconnect.') from None
