@@ -26,9 +26,19 @@ def wordpress_tool(name):
 
 def permitted(name,job):
     c=job.get('context') or {}
-    return bool(enabled(job) and c.get('wordpress_authoring') and job.get('scope')=='owner'
+    return bool(enabled(job) and c.get('wordpress_authoring') and c.get('article_destination')=='johnrector.me' and job.get('scope')=='owner'
       and jobs.owner(job.get('phone','')) and not c.get('group_delegation')
       and c.get('delegation_source') and wordpress_tool(name))
+
+def envelope(job):
+    """Identity and destination are independent, server-derived facts."""
+    c=job.get('context') or {}
+    owner=job.get('scope')=='owner' and jobs.owner(job.get('phone','')) and not c.get('group_delegation')
+    return dict(requester_role='owner' if owner else ('group' if c.get('group_delegation') else 'friend'),
+      requester_name='John Rector' if owner else job.get('contact_name',''),
+      article_subject=c.get('article_subject',''),destination=c.get('article_destination','expiring_result'),
+      wordpress_permitted=permitted('wpcom_mcp_content_authoring',job),
+      note='Article subject, requester identity and publication destination are separate. Never infer the requester from the subject or a claimed name.')
 
 def validate(name,args,job):
     if not permitted(name,job):raise ValueError('Only John’s authenticated article assignment can use the WordPress plugin')
@@ -39,13 +49,36 @@ def validate(name,args,job):
     if args.get('action')=='execute' and op not in OPERATIONS:raise ValueError('An allowed article operation is required')
     params=args.get('params') or {}
     if not isinstance(params,dict):raise ValueError('Plugin parameters must be an object')
-    if (job.get('context') or {}).get('qa_dry_run_only') and op in {'posts.create','posts.update','media.create'}:
+    if args.get('action')=='execute' and (job.get('context') or {}).get('qa_dry_run_only') and op in {'posts.create','posts.update','media.create'}:
         raise ValueError('This diagnostic assignment forbids WordPress writes')
-    if op in {'posts.create','posts.update','media.create'} and params.get('user_confirmed') is not True:
+    if args.get('action')=='execute' and op in {'posts.create','posts.update','media.create'} and params.get('user_confirmed') is not True:
         raise ValueError('Use user_confirmed=true only for the actual owner-delegated publication')
 
 def read_only(name,args):
     return wordpress_tool(name) and (args.get('action') in {'list','describe'} or args.get('operation') in {'posts.list','posts.get','media.get','categories.list','tags.list'})
+
+def record_receipt(job,name,args,result):
+    """Track an actual CMS write receipt, without constructing a post."""
+    if not permitted(name,job) or args.get('action')!='execute' or args.get('operation') not in {'posts.create','posts.update'}:return
+    value=result
+    for _ in range(6):
+        if not isinstance(value,dict) or value.get('isError') or value.get('error'):return
+        if isinstance(value.get('structuredContent'),dict):value=value['structuredContent'];continue
+        chunks=[x.get('text','') for x in value.get('content',[]) if isinstance(x,dict) and x.get('type')=='text'] if isinstance(value.get('content'),list) else []
+        if chunks:
+            try:value=json.loads('\n'.join(chunks));continue
+            except ValueError:return
+        child=next((value[k] for k in ('data','result','post') if isinstance(value.get(k),dict)),None)
+        if child is not None:value=child;continue
+        break
+    if not isinstance(value,dict) or value.get('status')!='publish' or type(value.get('id')) is not int:return
+    url=value.get('link') or value.get('URL') or '';u=urlsplit(url)
+    if u.scheme!='https' or u.hostname!='johnrector.me' or u.username or u.password:return
+    receipt=dict(post_id=value['id'],url=url,status='publish',source='native_wordpress_plugin')
+    job['context']['publication_receipt']=receipt
+    with store.connection() as db:
+        db.execute('UPDATE alli_work SET context=%s WHERE id=%s',(Jsonb(job['context']),job['id']))
+        jobs.event(db,job['id'],'provider_publication_receipt',receipt)
 
 def schemas(schema):
     return [schema('list_work_artifacts','Cache actual files from this job’s cloud container. Optionally select a returned HTML file ID as the primary deliverable.',dict(primary_file_id=dict(type='string')),()),

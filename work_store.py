@@ -193,10 +193,14 @@ def finish(wid,result,sources,files,*,outcome='completed'):
             row=dict(id=wid,phone=job[0]);link=result_url(row)
             lead={'completed':'Your work is ready','partial':'I finished part of your work; some steps still need attention','blocked':'Your work needs attention; I saved the details'}[outcome]
             public=(job[5] or {}).get('wordpress_public_url','') if len(job)>5 and (job[5] or {}).get('wordpress_verified') and outcome=='completed' else ''
+            receipt=(job[5] or {}).get('publication_receipt') or {}
+            if receipt.get('source')=='native_wordpress_plugin' and receipt.get('status')=='publish' and outcome=='completed':public=receipt.get('url','')
             parsed=__import__('urllib.parse',fromlist=['urlsplit']).urlsplit(public)
             published=parsed.scheme=='https' and parsed.hostname=='johnrector.me' and not parsed.username and not parsed.password
             message=f"Alli: {lead} — {job[2]}.\n{public if published else link}\nReply here with any changes you'd like."+('' if published else ' This result link expires in 7 days.')
-            rid='work-result:'+wid
+            # A resumed assignment can finish after an earlier blocked/partial
+            # receipt. Same outcome/result replays dedupe; a new result notifies.
+            rid='work-result:'+wid+':'+hashlib.sha256((outcome+'\n'+result).encode()).hexdigest()[:16]
             sms.enqueue_in_db(db,sms.TextMessage(request_id=rid,phone=job[0],recipient_name=job[1],message=message),context=dict(kind='cloud_work',work_id=wid))
             db.execute('UPDATE alli_work SET outbound_id=%s WHERE id=%s',(rid,wid))
         store.notify(db,'work:'+wid+':'+outcome,dict(source='cloud_work',work_id=wid,phone=job[0],status=outcome,follow_up_needed=outcome!='completed',summary='Cloud work '+outcome+': '+job[2]))

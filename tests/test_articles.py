@@ -12,7 +12,7 @@ def test_article_destination_is_server_bound(monkeypatch,owner,group,blog,expect
     def create(*a,**kw):captured.update(kw);return dict(ok=True,work_id='TEST',state='queued')
     monkeypatch.setattr(intake.jobs,'create',create)
     result=intake.create('owner','John','A Person','',blog,'request1',authorized_owner=owner,shared_group=group,original='Research and publish A Person')
-    assert captured['owner_scope'] is expected
+    assert captured['owner_scope'] is bool(owner and not group)
     assert captured['context']['wordpress_authoring'] is expected
     assert result['destination']==('johnrector.me' if expected else 'expiring_result')
     assert not any(k in captured['context'] for k in ('prior_work','private_contacts','account_data'))

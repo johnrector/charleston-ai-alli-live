@@ -10,7 +10,7 @@ import phone_tool_policy as policy
 
 NATIVE='wordpress-com.wpcom-mcp-content-authoring'
 
-def owner():return dict(id='HANDOFF',scope='owner',phone='john',instruction='Publish the finished article',approval=None,context=dict(cloud_article_handoff=True,public_article=True,wordpress_authoring=True,delegation_source='Publish this article to my WordPress site.'))
+def owner():return dict(id='HANDOFF',scope='owner',phone='john',instruction='Publish the finished article',approval=None,context=dict(cloud_article_handoff=True,public_article=True,wordpress_authoring=True,article_destination='johnrector.me',delegation_source='Publish this article to my WordPress site.'))
 
 @pytest.fixture(autouse=True)
 def identity(monkeypatch):monkeypatch.setattr(handoff.jobs,'owner',lambda p:p=='john')
@@ -35,6 +35,13 @@ def test_friend_and_group_cannot_publish(change):
 def test_site_and_operation_and_confirmation_are_bound(args):
     with pytest.raises(ValueError):policy.validate(NATIVE,args,owner())
 
+def test_reading_a_write_schema_is_not_publishing():
+    args=dict(action='describe',operation='posts.create',wpcom_site='johnrector.me')
+    policy.validate(NATIVE,args,owner())
+    assert handoff.read_only(NATIVE,args)
+    args['action']='execute'
+    with pytest.raises(ValueError):policy.validate(NATIVE,args,owner())
+
 def test_native_plugin_receives_agent_authored_html_unchanged(monkeypatch):
     job=owner();job['state']='running';monkeypatch.setattr(work_agent.jobs,'read',lambda _:job);args=dict(action='execute',operation='posts.create',wpcom_site='johnrector.me',params=dict(user_confirmed=True,content='<article>Exact cloud-agent authored HTML</article>',status='publish'))
     receipt=dict(id=123,link='https://johnrector.me/test/',status='publish')
@@ -50,3 +57,19 @@ def test_native_plugin_receives_agent_authored_html_unchanged(monkeypatch):
     call=SimpleNamespace(name='run_connected_tool',call_id='test',arguments=json.dumps(dict(tool_name=NATIVE,arguments_json=json.dumps(args))))
     assert asyncio.run(work_agent.execute(job,call,object()))==receipt
     invoke.assert_awaited_once_with(NATIVE,args,job=job)
+    assert job['context']['publication_receipt']==dict(post_id=123,url='https://johnrector.me/test/',status='publish',source='native_wordpress_plugin')
+
+
+def test_owner_identity_does_not_depend_on_publication_destination(monkeypatch):
+    import article_tasks
+    seen={}
+    monkeypatch.setattr(article_tasks.jobs,'create',lambda *a,**kw:seen.update(kw) or dict(ok=True,work_id='OWNER',state='queued'))
+    monkeypatch.setattr(article_tasks.jobs,'clean',lambda x,*a,**kw:x)
+    article_tasks.create('john','Misleading subject name','Blake Miller','Public profile',False,'owner-preview',authorized_owner=True,original='Write a standalone article about Blake')
+    assert seen['owner_scope'] is True and seen['context']['wordpress_authoring'] is False
+    job=owner();job['context']=seen['context']
+    routing=handoff.envelope(job)
+    assert routing['requester_role']=='owner' and routing['requester_name']=='John Rector'
+    assert routing['article_subject']=='Blake Miller' and routing['destination']=='expiring_result'
+    assert routing['wordpress_permitted'] is False
+    assert not {'find_connected_tools','run_connected_tool'} & {t['name'] for t in work_agent.functions(job)}

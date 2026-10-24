@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import os
+import httpx
 from contextlib import asynccontextmanager
 from datetime import datetime,timezone
 from psycopg.types.json import Jsonb
@@ -318,9 +319,11 @@ async def execute(job,call,client=None):
     if handoff.enabled(job):
         if call.name in handoff.NAMES:
             try:return await handoff.execute(job,call,args,client)
-            except (ValueError,RuntimeError) as exc:return dict(ok=False,error=str(exc))
+            except (ValueError,RuntimeError,httpx.HTTPError) as exc:return dict(ok=False,error=str(exc))
         if call.name not in {'find_connected_tools','run_connected_tool'}:
             return dict(ok=False,error='That retired/unavailable tool was not executed. Use find_connected_tools and run_connected_tool for the connected native WordPress plugin, or the supplied artifact tools. Follow the mounted cloud skill adapter.')
+        if runtime.state in {'starting','waiting_for_previous_instance'}:
+            await asyncio.to_thread(__import__('cloud_calls').defer,job['id'])
         if call.name=='run_connected_tool' and not handoff.permitted(args.get('tool_name',''),job):raise ValueError('Article assignments have no private email/calendar/account access')
     if not handoff.enabled(job) and (job.get('context') or {}).get('public_article') and call.name not in (__import__('wordpress_publish').NAMES|__import__('article_studio').NAMES):raise ValueError('Article jobs use public research and their bound publishing/artifact tools only')
     if call.name=='find_connected_tools':
@@ -381,6 +384,7 @@ async def execute(job,call,client=None):
             raise ValueError('An earlier tool attempt is uncertain; review its provider receipt')
         jobs.event(db,job['id'],'tool_attempt',dict(call_id=call.call_id,tool=args['tool_name']))
     result=await runtime.invoke(args['tool_name'],arguments,job=job)
+    if handoff.enabled(job):await asyncio.to_thread(handoff.record_receipt,job,args['tool_name'],arguments,result)
     encoded=json.dumps(result,default=str)
     if len(encoded)>30000:result=dict(ok=True,truncated=True,content=encoded[:30000],note='Narrow the query; this is a bounded result')
     with store.connection() as db:jobs.event(db,job['id'],'tool_result',dict(call_id=call.call_id,result=result))
@@ -457,6 +461,7 @@ async def run_job(job,client=None):
             response=await api.responses.create(model=MODEL,reasoning=dict(REASONING),instructions=RULES,
               input=json.dumps(dict(request=job['instruction'],requester=job['contact_name'],authority=job['scope'],
                 current_eastern_datetime=datetime.now(__import__('zoneinfo').ZoneInfo('America/New_York')).isoformat(),
+                article_routing=__import__('article_handoff').envelope(job) if __import__('article_handoff').enabled(job) else None,
                 context=({k:v for k,v in job.get('context',{}).items() if k in ('public_article','article_subject','article_public_context','wordpress_authoring','article_destination','wordpress_container_id')} if job.get('context',{}).get('public_article') else job.get('context',{}))),ensure_ascii=False),tools=tools,parallel_tool_calls=False,
               background=True,max_output_tokens=max_output,max_tool_calls=12,
               text=dict(format=FINAL_FORMAT),
