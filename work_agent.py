@@ -472,7 +472,11 @@ async def run_job(job,client=None):
             for (details,) in db.execute("SELECT details FROM alli_work_event WHERE work_id=%s AND kind='provider_output' ORDER BY id",(job['id'],)).fetchall():
                 all_sources.extend(s for s in details['sources'] if s not in all_sources)
                 all_files.extend(f for f in details['files'] if f not in all_files)
-        for step in range(12):
+        # Native plugins expose schema reads, data reads and writes separately.
+        # Give the cloud authoring agent room to finish its skill; all per-tool
+        # permissions, token budgets and write replay protections still apply.
+        steps=max(12,min(64,int(os.getenv('ALLI_ARTICLE_MAX_STEPS','48')))) if (job.get('context') or {}).get('public_article') else 12
+        for step in range(steps):
             response=await wait_response(api,response,job['id'])
             current=await asyncio.to_thread(jobs.read,job['id'])
             if not current or current['state']=='cancelled':raise WorkCancelled()

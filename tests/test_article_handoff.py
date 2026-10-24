@@ -43,7 +43,7 @@ def test_reading_a_write_schema_is_not_publishing():
     with pytest.raises(ValueError):policy.validate(NATIVE,args,owner())
 
 def test_native_plugin_receives_agent_authored_html_unchanged(monkeypatch):
-    job=owner();job['state']='running';monkeypatch.setattr(work_agent.jobs,'read',lambda _:job);args=dict(action='execute',operation='posts.create',wpcom_site='johnrector.me',params=dict(user_confirmed=True,content='<article>Exact cloud-agent authored HTML</article>',status='publish'))
+    job=owner();job['state']='running';monkeypatch.setattr(work_agent.runtime,'state','connected');monkeypatch.setattr(work_agent.jobs,'read',lambda _:job);args=dict(action='execute',operation='posts.create',wpcom_site='johnrector.me',params=dict(user_confirmed=True,content='<article>Exact cloud-agent authored HTML</article>',status='publish'))
     receipt=dict(id=123,link='https://johnrector.me/test/',status='publish')
     tool=dict(name=NATIVE,description='Native WordPress tool',annotations=dict(readOnlyHint=False))
     monkeypatch.setattr(work_agent.runtime,'tools',{NATIVE:tool})
