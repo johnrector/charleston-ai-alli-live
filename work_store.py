@@ -97,7 +97,7 @@ def create(phone,name,title,instruction,sid,*,owner_scope=False,notify=True,cont
         if not internal:reserve_in_db(db,'cloud_job',phone,dedupe)
         active=db.execute("SELECT count(*) FROM alli_work WHERE phone=%s AND NOT internal AND state IN ('queued','running','waiting','needs_john')",(phone,)).fetchone()[0]
         today=db.execute("SELECT count(*) FROM alli_work WHERE phone=%s AND NOT internal AND created_at>now()-interval '24 hours'",(phone,)).fetchone()[0]
-        if not internal and (active>=int(os.getenv('ALLI_WORK_ACTIVE_PER_CONTACT','3')) or today>=int(os.getenv('ALLI_WORK_DAILY_PER_CONTACT','10'))):
+        if not internal and (active>=int(os.getenv('ALLI_WORK_ACTIVE_PER_CONTACT','3')) or today>=int(os.getenv('ALLI_WORK_DAILY_OWNER' if owner(phone) else 'ALLI_WORK_DAILY_PER_CONTACT','20' if owner(phone) else '10'))):
             raise ValueError('Your cloud work limit is reached. Finish existing work or ask John to review it.')
         total=db.execute("SELECT count(*) FROM alli_work WHERE NOT internal AND created_at>now()-interval '24 hours'").fetchone()[0]
         if not internal and total>=int(os.getenv('ALLI_WORK_DAILY_TOTAL','100')):raise ValueError('Cloud work is at capacity; John can review it')
@@ -175,7 +175,7 @@ def finish(wid,result,sources,files,*,outcome='completed'):
     import mimetypes
     store.initialize()
     with store.connection() as db:
-        job=db.execute('SELECT phone,contact_name,title,state,notify FROM alli_work WHERE id=%s FOR UPDATE',(wid,)).fetchone()
+        job=db.execute('SELECT phone,contact_name,title,state,notify,context FROM alli_work WHERE id=%s FOR UPDATE',(wid,)).fetchone()
         if not job or job[3]=='cancelled':return
         if not allowed(db,job[0]):raise ValueError('Contact is no longer approved')
         db.execute("DELETE FROM alli_work_file WHERE created_at<now()-interval '14 days'")
@@ -192,7 +192,10 @@ def finish(wid,result,sources,files,*,outcome='completed'):
         if job[4]:
             row=dict(id=wid,phone=job[0]);link=result_url(row)
             lead={'completed':'Your work is ready','partial':'I finished part of your work; some steps still need attention','blocked':'Your work needs attention; I saved the details'}[outcome]
-            message=f"Alli: {lead} — {job[2]}.\n{link}\nReply here with any changes you'd like. This result link expires in 7 days."
+            public=(job[5] or {}).get('wordpress_public_url','') if len(job)>5 and (job[5] or {}).get('wordpress_verified') and outcome=='completed' else ''
+            parsed=__import__('urllib.parse',fromlist=['urlsplit']).urlsplit(public)
+            published=parsed.scheme=='https' and parsed.hostname=='johnrector.me' and not parsed.username and not parsed.password
+            message=f"Alli: {lead} — {job[2]}.\n{public if published else link}\nReply here with any changes you'd like."+('' if published else ' This result link expires in 7 days.')
             rid='work-result:'+wid
             sms.enqueue_in_db(db,sms.TextMessage(request_id=rid,phone=job[0],recipient_name=job[1],message=message),context=dict(kind='cloud_work',work_id=wid))
             db.execute('UPDATE alli_work SET outbound_id=%s WHERE id=%s',(rid,wid))

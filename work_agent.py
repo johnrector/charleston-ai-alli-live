@@ -238,7 +238,7 @@ def functions(job):
       schema('run_connected_tool','Execute a permitted connected tool within the original assignment. Routine delegated steps do not require reconfirmation.',
         dict(tool_name=dict(type='string'),arguments_json=dict(type='string')),('tool_name','arguments_json'))]
     if (job.get('context') or {}).get('public_article'):
-        return [result[0],*__import__('wordpress_publish').schemas(schema,job)]
+        return [result[0],*(__import__('wordpress_publish').schemas(schema,job) if job.get('context',{}).get('wordpress_authoring') else __import__('article_studio').schemas(schema))]
     result+=__import__('cloud_calls').schemas(schema,job)
     if job['scope']=='owner':
         result += [schema('lookup_calendar','Read John’s live calendar for an owner-requested preparation task.',dict(query=dict(type='string')),('query',))]
@@ -312,8 +312,9 @@ async def execute(job,call,client=None):
     if call.name=='ask_for_clarification':
         if approval.get('call_id')==call.call_id and approval.get('decision')=='reply':return dict(ok=True,answer=approval['answer'],from_john=approval.get('ask_john',False))
         raise Waiting(dict(kind='clarification',call_id=call.call_id,question=jobs.clean(args['question'],1500),ask_john=bool(args.get('ask_john')),arguments=args))
-    if (job.get('context') or {}).get('public_article') and call.name not in __import__('wordpress_publish').NAMES:raise ValueError('Article jobs use public research and their bound publishing/artifact tools only')
+    if (job.get('context') or {}).get('public_article') and call.name not in (__import__('wordpress_publish').NAMES|__import__('article_studio').NAMES):raise ValueError('Article jobs use public research and their bound publishing/artifact tools only')
     if call.name=='find_connected_tools':return find_tools(args.get('query',''),job['scope'])
+    if call.name in __import__('article_studio').NAMES:return await __import__('article_studio').execute(job,call,args,client)
     if call.name in __import__('wordpress_publish').NAMES:return await __import__('wordpress_publish').execute(job,call,args,client)
     if call.name in __import__('cloud_calls').NAMES:return await __import__('cloud_calls').execute(job,call,args,client)
     if job['scope']=='friend' and call.name in __import__('friend_work').NAMES:
@@ -412,8 +413,8 @@ def final_output(response):
 async def execution_tools(job,api):
     if job.get('internal'):return []
     environment=dict(type='container_auto')
-    if (job.get('context') or {}).get('wordpress_authoring'):
-        __import__('wordpress_publish').owner_only(job)
+    if (job.get('context') or {}).get('public_article'):
+        if job['context'].get('wordpress_authoring'):__import__('wordpress_publish').owner_only(job)
         environment=dict(type='container_reference',container_id=await __import__('wordpress_publish').container(job,api))
     elif job['scope']=='owner' and not (job.get('context') or {}).get('group_delegation'):
         environment['skills']=[await __import__('cloud_skills').attachment(api)]
@@ -474,6 +475,8 @@ async def run_job(job,client=None):
                     outcome='partial'
                     url=job['context'].get('wordpress_public_url')
                     result=('The article exists at '+url+' but final publication verification is not complete. ' if url else 'WordPress publication is not verified. The prepared article files and diagnostic details are saved. ')+result
+                if (job.get('context') or {}).get('public_article') and not job['context'].get('wordpress_authoring') and not job['context'].get('article_verified'):
+                    outcome='partial';result='The article’s final visual verification is incomplete. The saved files and details are available. '+result
                 artifacts=[]
                 for f in all_files[:6]:
                     key=f['container_id']+':'+f['file_id']

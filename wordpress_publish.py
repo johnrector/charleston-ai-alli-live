@@ -177,18 +177,7 @@ async def execute(job,call,args,client):
         return dict(site='https://'+SITE,recent_designs=sources,categories=categories,tags=tags,actual_media=media,
           publisher='Exact personal WordPress Publisher HTML engine, cloud account transport. No Mac credentials. Do not publish without all preflight/live QA gates.')
     if call.name=='wordpress_artifacts':
-        cid=(job.get('context') or {}).get('wordpress_container_id')
-        if cid:
-            listing=await client.containers.files.list(cid,limit=100)
-            for f in listing.data[:100]:
-                path=getattr(f,'path','') or ''
-                if not path.startswith('/mnt/data/') or Path(path).suffix.lower() not in {'.html','.png','.json','.jpg','.jpeg','.webp'}:continue
-                key=cid+':'+f.id
-                if await asyncio.to_thread(jobs.cached_file,job['id'],key):continue
-                content=await client.containers.files.content.retrieve(f.id,container_id=cid)
-                await asyncio.to_thread(jobs.cache_file,job['id'],key,Path(path).name,content.content)
-        from work_routes import files
-        return dict(files=await asyncio.to_thread(files,job['id']))
+        return await __import__('article_studio').import_files(job,client)
     if call.name=='wordpress_media':
         if bool(args['source_url'])==bool(args['artifact_id']):raise ValueError('Choose one image source')
         params=dict(wpcom_site=SITE,title=args['title'][:180],alt_text=args['alt_text'][:400])
@@ -263,11 +252,12 @@ async def container(job,client):
     if cid:
         existing=await client.containers.retrieve(cid)
         if getattr(existing,'status','')!='expired':return cid
-    folder=Path(__file__).parent/'work_skills'/'wordpress-publisher'
+    kind='wordpress-publisher' if (job.get('context') or {}).get('wordpress_authoring') else 'article-studio'
+    folder=Path(__file__).parent/'work_skills'/kind
     buf=io.BytesIO()
     with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:
         z.writestr('john-publisher/SKILL.md',(folder/'SKILL.md').read_bytes())
-        z.writestr('john-publisher/render_article.py',(folder/'render_article.py').read_bytes())
+        z.writestr('john-publisher/render_article.py',(Path(__file__).parent/'work_skills'/'wordpress-publisher'/'render_article.py').read_bytes())
         z.writestr('john-publisher/publisher_html.py',Path(engine.__file__).read_bytes())
     skill=await client.skills.create(files=('john-publisher.zip',buf.getvalue(),'application/zip'))
     created=await client.containers.create(name='alli-publisher-'+job['id'],memory_limit='1g',network_policy=dict(type='disabled'),

@@ -31,7 +31,7 @@ def test_script_free_html_controls_are_supported():
 
 def test_public_article_tools_cannot_expose_accounts():
     job=dict(scope='friend',context=dict(public_article=True))
-    assert [t['name'] for t in work_agent.functions(job)]==['ask_for_clarification']
+    assert [t['name'] for t in work_agent.functions(job)]==['ask_for_clarification','article_artifacts','article_verify']
 
 def test_public_article_backend_rejects_undeclared_private_tools(monkeypatch):
     job=dict(id='ARTICLE',scope='owner',context=dict(public_article=True,wordpress_authoring=True))

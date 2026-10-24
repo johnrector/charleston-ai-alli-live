@@ -5,7 +5,13 @@ from pathlib import Path,PurePosixPath
 from urllib.parse import urldefrag
 
 bundle=Path(sys.argv[1]);output=Path(sys.argv[2]);output.mkdir(parents=True,exist_ok=True)
-raw=zipfile.ZipFile(bundle)
+if zipfile.is_zipfile(bundle):
+    raw=zipfile.ZipFile(bundle)
+else:
+    content=bundle.read_bytes();buffer=io.BytesIO()
+    with zipfile.ZipFile(buffer,'w') as z:
+        z.writestr('page.html',content);z.writestr('manifest.json',json.dumps(dict(source_hash=hashlib.sha256(content).hexdigest(),phase='article',url='https://article.alli.invalid/',assets={})))
+    buffer.seek(0);raw=zipfile.ZipFile(buffer)
 if any(PurePosixPath(n).is_absolute() or '..' in PurePosixPath(n).parts for n in raw.namelist()):raise ValueError('Invalid snapshot paths')
 manifest=json.loads(raw.read('manifest.json'));source=raw.read('page.html').decode()
 wrapper=Path(tempfile.mkdtemp(prefix='alli-chrome-'))/'chromium'
