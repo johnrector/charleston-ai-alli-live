@@ -30,6 +30,7 @@ FINAL_FORMAT=dict(type='json_schema',name='finished_work',strict=True,schema=dic
     pending_assignments=dict(type='array',items=dict(type='object',properties=dict(title=dict(type='string'),instruction=dict(type='string'),source_quote=dict(type='string')),required=['title','instruction','source_quote'],additionalProperties=False))),
   required=['outcome','result','action_items','pending_assignments'],additionalProperties=False))
 RULES='''You are Alli, John Rector's AI assistant, doing delegated work in the cloud.
+Resolve relative dates against the original context.requested_at, converted to Eastern, when present; the current clock is for fresh checks.
 The supplied request is the task, not a question to answer with a plan. Produce
 the finished work. Use judgment about structure, medium and useful next steps.
 You can research live sources, calculate, write, analyze, create documents,
@@ -405,7 +406,7 @@ async def run_job(job,client=None):
                 context=job.get('context',{})),ensure_ascii=False),tools=tools,parallel_tool_calls=False,
               background=True,max_output_tokens=max_output,max_tool_calls=12,
               text=dict(format=FINAL_FORMAT),
-              extra_headers={'Idempotency-Key':'alli-work:'+job['id']+':start'})
+              extra_headers={'Idempotency-Key':'alli-work:'+job['id']+':start'+(':'+str(job['context']['review_revision']) if job.get('context',{}).get('review_revision') else '')})
             await asyncio.to_thread(jobs.update,job['id'],response_id=response.id)
         all_sources=[];all_files=[]
         with store.connection() as db:
@@ -435,6 +436,7 @@ async def run_job(job,client=None):
                 result=final['result'].strip();outcome=final['outcome']
                 if not result or outcome not in ('completed','partial','blocked'):raise ValueError('No verified final work result was produced')
                 if job.get('internal') and (job.get('context') or {}).get('call_recovery_sid'):
+                    if await asyncio.to_thread(__import__('call_followthrough').refresh_review,job):return
                     followups=await asyncio.to_thread(__import__('call_followthrough').queue_assignments,job,final.get('pending_assignments',[]))
                     if followups:result+='\nSaved follow-up jobs: '+', '.join(f['work_id'] for f in followups)
                 artifacts=[]

@@ -65,6 +65,23 @@ def recover():
 
 def normalized(text):return ' '.join(re.findall(r'\w+',str(text).casefold()))
 
+def refresh_review(job):
+    """A late live-tool receipt must reach the reviewer before it creates work."""
+    from psycopg.types.json import Jsonb
+    context=job['context'];sid=context['call_recovery_sid']
+    with store.connection() as db,db.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT id,title,instruction,state FROM alli_work WHERE NOT internal AND (context->>'source_sid'=%s OR context->>'group_sid'=%s) ORDER BY created_at",(sid,sid))
+        existing=[dict(r) for r in cur.fetchall()]
+        cur.execute("SELECT payload FROM alli_communication_update WHERE payload->>'sid'=%s AND payload->>'source'='business_tool_result' AND created_at>=%s ORDER BY id",(sid,__import__('datetime').datetime.fromisoformat(context['requested_at'])))
+        receipts=[r['payload'] for r in cur.fetchall()]
+        if {r['id'] for r in existing}=={r['id'] for r in context.get('existing_jobs',[])} and receipts==context.get('verified_receipts',[]):return False
+        revision=context.get('review_revision',0)+1
+        if revision>3:raise ValueError('Call receipts are still changing. John can review the captured call before any duplicate work starts.')
+        fresh=dict(context,existing_jobs=existing,verified_receipts=receipts,review_revision=revision)
+        db.execute("UPDATE alli_work SET context=%s,response_id=NULL,state='queued',updated_at=now() WHERE id=%s AND state='running'",(Jsonb(fresh),job['id']))
+        jobs.event(db,job['id'],'call_review_refreshed',dict(revision=revision))
+    return True
+
 def queue_assignments(job,assignments):
     context=job['context'];source=context['caller_speech'];queued=[]
     if not isinstance(assignments,list) or len(assignments)>3:raise ValueError('Call recovery returned too many assignments')
@@ -77,5 +94,5 @@ def queue_assignments(job,assignments):
         if context.get('shared_group'):child_context['group_delegation']=True
         if security.owner(job['phone']) and not context['owner_delegation']:child_context['owner_call_unverified']=True
         queued.append(jobs.create(job['phone'],job['contact_name'],task['title'],task['instruction'],
-          'call-recovered:'+job['id']+':'+str(index),owner_scope=bool(context['owner_delegation'] and not context.get('shared_group')),notify=True,context=child_context))
+          'call-recovered:'+job['id']+':'+__import__('hashlib').sha256((normalized(task['source_quote'])+'|'+normalized(task['instruction'])).encode()).hexdigest()[:24],owner_scope=bool(context['owner_delegation'] and not context.get('shared_group')),notify=True,context=child_context))
     return queued

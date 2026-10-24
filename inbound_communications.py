@@ -194,6 +194,7 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
         def access_guard(original):
             async def run(**kwargs):
                 live=session_reader() if session_reader else None
+                if await asyncio.to_thread(__import__('security_controls').blocked,phone):return dict(ok=False,error='This contact’s access has been suspended by John',performed=False)
                 if live and live.metadata.get('budget_blocked'):return dict(ok=False,error='This call has reached its application usage ceiling',performed=False)
                 if group_state['active']:
                     if original.name=='start_cloud_work':return await public_group_work(**kwargs)
@@ -477,7 +478,7 @@ class InboundCommunications:
             from live_observer import AlliLiveConfig
             channel=VoiceChannel(self.tac,config=AlliLiveConfig(bound_phone=phone,tools=registry,default_session_config=session,
                 welcome_instruction='Speak immediately. Use the personalized OPENING in your session instructions verbatim, then listen. Do not replace it with a generic identity question.'))
-            self.channels[token]={'sid':sid,'channel':channel,'connected':False,'max_seconds':max_seconds}
+            self.channels[token]={'sid':sid,'phone':phone,'channel':channel,'connected':False,'max_seconds':max_seconds}
             def expire_unconnected():
                 if token in self.channels and not self.channels[token]['connected']:self.channels.pop(token,None)
             asyncio.get_running_loop().call_later(960,expire_unconnected)
@@ -516,7 +517,7 @@ class InboundCommunications:
                     now=__import__('time').monotonic()
                     limit=(live.metadata.get('max_seconds') if live else None) or entry.get('max_seconds',120)
                     remaining=limit-(now-started)
-                    if remaining<=0:
+                    if remaining<=0 or await asyncio.to_thread(__import__('security_controls').blocked,entry.get('phone','')):
                         await adapter.close();break
                     if live and now-last_checkpoint>=15:
                         fragments=[] if live.metadata.get('suppress_transcript_persistence') else live.metadata.get('live_transcript_fragments',[])

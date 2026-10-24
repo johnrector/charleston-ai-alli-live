@@ -137,7 +137,7 @@ def data():
           (SELECT count(*) FROM alli_work w WHERE w.phone=c.phone AND NOT w.internal) AS work_count
         FROM alli_contact_name c LEFT JOIN activity a ON a.phone=c.phone
         ORDER BY a.last_activity DESC NULLS LAST,lower(c.name),c.phone''')
-        people=[promises.serial(row) for row in cur.fetchall()]
+        people=[dict(promises.serial(row),is_owner=store.normalize_phone(row['phone'])==store.normalize_phone(os.getenv('ALLI_OWNER_PHONE',''))) for row in cur.fetchall()]
         cur.execute("SELECT a.phone,a.code,a.created_at,c.name FROM alli_contact_approval a LEFT JOIN alli_contact_name c ON c.phone=a.phone WHERE a.decision='pending' ORDER BY a.created_at")
         approvals=[promises.serial(row) for row in cur.fetchall()]
         cur.execute('''WITH latest AS (

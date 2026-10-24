@@ -254,3 +254,23 @@ def test_contact_cannot_change_a_meeting_for_other_guests():
     with pytest.raises(ValueError,match='other people'):contact_events.require_individual_meeting(event)
     event['attendees'].pop()
     contact_events.require_individual_meeting(event)
+
+
+def test_owner_in_directory_is_not_ambiguous_in_group_delivery():
+    db=Mock();db.execute.return_value.fetchall.return_value=[(OWNER,'John Rector'),(CALLER,'Jane Doe')]
+    result=notes.resolve(db,[dict(name='John',phone='',declined=False)])
+    assert len(result)==1 and result[0]['bound_phone']==OWNER
+
+
+def test_late_native_job_refreshes_call_review_before_recovery(monkeypatch):
+    import call_followthrough as follow
+    db=Mock();cur=Mock();cur.fetchall.side_effect=[[dict(id='LATE-JOB',title='Saved by the live backend',instruction='Do the requested work',state='queued')],[]]
+    db.cursor.side_effect=lambda **kw:connection(cur)
+    monkeypatch.setattr(follow.store,'connection',lambda:connection(db))
+    monkeypatch.setattr(follow.jobs,'event',Mock())
+    job=dict(id='REVIEW',context=dict(call_recovery_sid=SID,requested_at=datetime.now(timezone.utc).isoformat(),existing_jobs=[],verified_receipts=[]))
+    assert follow.refresh_review(job)
+    sql,params=db.execute.call_args.args
+    assert params[0].obj['existing_jobs'][0]['id']=='LATE-JOB'
+    assert params[0].obj['review_revision']==1
+    assert "state='queued'" in sql and 'response_id=NULL' in sql

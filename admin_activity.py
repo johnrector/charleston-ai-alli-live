@@ -1,6 +1,8 @@
 """Owner-only history and contact lifecycle controls."""
 import asyncio
 import json
+import base64
+from datetime import datetime
 from psycopg.rows import dict_row
 from fastapi import Depends,HTTPException,Request
 from pydantic import BaseModel,ConfigDict,Field
@@ -49,11 +51,39 @@ def conversation(sid):
             return __import__('promises').serial(row) if row else None
     return __import__('promises').serial(row)
 
+def conversations(phone,cursor=''):
+    before=None;key=''
+    if cursor:
+        try:
+            stamp,key=json.loads(base64.urlsafe_b64decode(cursor[:500]+'='*((-len(cursor))%4)))
+            before=datetime.fromisoformat(stamp)
+            if not before.tzinfo or not isinstance(key,str):raise ValueError()
+        except Exception:raise ValueError('Invalid conversation page')
+    with store.connection() as db,db.cursor(row_factory=dict_row) as cur:
+        cur.execute('''WITH conversations AS (
+          SELECT 'in:'||sid AS key,sid AS identifier,channel AS kind,status,created_at,left(body,220) AS preview FROM alli_inbound WHERE phone=%s
+          UNION ALL SELECT 'sms:'||request_id,request_id,'outbound text',status,send_at,left(body,220) FROM alli_outbound_sms
+            WHERE phone=%s AND send_at<=now() AND status<>'scheduled' AND request_id NOT LIKE 'dashboard-login:%%' AND request_id NOT LIKE 'owner-auth:%%'
+          UNION ALL SELECT 'call:'||id,coalesce(call_sid,id),'outbound call',coalesce(disposition,status),created_at,
+            left(coalesce(outcome->>'summary',context->>'mission','Saved call receipt'),220) FROM alli_appointment_dispatch WHERE context->>'phone'=%s
+          ) SELECT * FROM conversations WHERE (%s::timestamptz IS NULL OR (created_at,key)<(%s::timestamptz,%s))
+          ORDER BY created_at DESC,key DESC LIMIT 26''',(phone,phone,phone,before,before,key))
+        rows=cur.fetchall()
+    more=len(rows)>25;rows=rows[:25]
+    next_cursor=base64.urlsafe_b64encode(json.dumps([rows[-1]['created_at'].isoformat(),rows[-1]['key']]).encode()).decode().rstrip('=') if more else None
+    return dict(ok=True,conversations=[__import__('promises').serial(r) for r in rows],next_cursor=next_cursor)
+
 def install(app):
     async def auth(request:Request):return await asyncio.to_thread(dashboard.authenticate,request)
     async def write(request:Request,identity=Depends(auth)):dashboard.write_guard(request,identity)
     @app.get('/dashboard/api/activity',dependencies=[Depends(auth)])
     async def activities(before:int=0,q:str=''):return await asyncio.to_thread(history,max(0,before),q)
+    @app.get('/dashboard/api/people/{phone}/conversations',dependencies=[Depends(auth)])
+    async def person_conversations(phone:str,cursor:str=''):
+        phone=store.normalize_phone(phone)
+        if not phone:raise HTTPException(422,'Invalid contact number')
+        try:return await asyncio.to_thread(conversations,phone,cursor)
+        except ValueError as exc:raise HTTPException(422,str(exc))
     @app.get('/dashboard/api/people/{phone}',dependencies=[Depends(auth)])
     async def person(phone:str,before:int=0):
         phone=store.normalize_phone(phone)

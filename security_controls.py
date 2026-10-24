@@ -127,7 +127,7 @@ def set_block(phone,enabled,reason=''):
         if enabled:
             db.execute("UPDATE alli_inbound SET context=jsonb_set(context,'{followthrough_suppressed}','true') WHERE phone=%s AND channel='voice'",(phone,))
             db.execute("UPDATE alli_work SET state='cancelled',error='Contact suspended by John',updated_at=now() WHERE phone=%s AND state IN ('queued','running','waiting','needs_john')",(phone,))
-            db.execute("UPDATE alli_outbound_sms SET status='cancelled',updated_at=now() WHERE phone=%s AND status='queued'",(phone,))
+            db.execute("UPDATE alli_outbound_sms SET status='cancelled',updated_at=now() WHERE phone=%s AND status='scheduled'",(phone,))
         store.notify(db,'contact-security:'+phone+':'+str(__import__('time').time_ns()),dict(source='contact_security',phone=phone,status='suspended' if enabled else 'reactivated',summary='John '+('suspended' if enabled else 'reactivated')+' this contact'))
 
 def delete_contact(phone):

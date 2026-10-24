@@ -34,7 +34,7 @@ def resolve(db,participants):
     rows=list(db.execute('''SELECT c.phone,c.name FROM alli_contact_name c WHERE c.source=ANY(%s)
       AND NOT EXISTS(SELECT 1 FROM alli_security_block b WHERE b.phone=c.phone)''',(list(TRUSTED),)).fetchall())
     owner=store.normalize_phone(__import__('os').getenv('ALLI_OWNER_PHONE',''))
-    if owner:rows.append((owner,'John Rector'))
+    if owner:rows=[(phone,name) for phone,name in rows if phone!=owner]+[(owner,'John Rector')]
     out=[]
     for p in participants:
         matches=[(phone,name) for phone,name in rows if (not p['phone'] or p['phone']==phone) and (norm(p['name'])==norm(name) or norm(name).startswith(norm(p['name'])+' '))]
@@ -90,7 +90,7 @@ def pause(sid):
         row=db.execute("UPDATE alli_group_notes SET status='paused',transcript='[]',items=NULL,updated_at=now() WHERE sid=%s RETURNING work_id",(sid,)).fetchone()
         if row and row[0]:
             db.execute("UPDATE alli_work SET state='cancelled',updated_at=now() WHERE id=%s AND state IN ('queued','running','waiting','needs_john')",(row[0],))
-        db.execute("UPDATE alli_outbound_sms SET status='cancelled',updated_at=now() WHERE context->>'group_sid'=%s AND status='queued'",(sid,))
+        db.execute("UPDATE alli_outbound_sms SET status='cancelled',updated_at=now() WHERE context->>'group_sid'=%s AND status='scheduled'",(sid,))
         store.notify(db,'group:'+sid+':paused',dict(source='group_notes',sid=sid,status='paused',summary='Group notes paused on request; captured notes cleared'))
 
 def action_messages(items,people):
