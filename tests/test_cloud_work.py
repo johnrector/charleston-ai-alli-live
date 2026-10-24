@@ -18,6 +18,15 @@ OWNER='+18433276008'
 FRIEND='+18435550100'
 OTHER='+18435550101'
 
+def test_final_json_is_parsed_separately_from_hosted_tool_progress():
+    final={'outcome':'completed','result':'Created the requested files'}
+    response=NS(output=[NS(type='message',content=[NS(type='output_text',text='I am using the PDF skill.')]),
+      NS(type='shell_call'),NS(type='message',content=[NS(type='output_text',text=json.dumps(final))])],
+      output_text='I am using the PDF skill.\n'+json.dumps(final))
+    assert agent.final_output(response)==final
+    response.output.append(NS(type='message',content=[NS(type='output_text',text='Invalid final output')]))
+    with pytest.raises(ValueError,match='verified'):agent.final_output(response)
+
 def test_pinned_linux_runtime_extracts_the_actual_official_package_layout(tmp_path,monkeypatch):
     import tarfile,hashlib,base64
     content=b'official-runtime-placeholder'
@@ -57,6 +66,18 @@ def test_job_phone_and_authority_are_bound_outside_model_arguments(monkeypatch):
     assert result['state']=='queued'
     assert create.call_args.args[:2]==(FRIEND,'Jane')
     assert create.call_args.kwargs['owner_scope'] is False
+
+@pytest.mark.parametrize('channel',['voice','sms'])
+def test_owner_can_delegate_account_work_and_calls_from_both_phone_channels(channel,monkeypatch):
+    monkeypatch.setenv('ALLI_OWNER_PHONE',OWNER)
+    monkeypatch.setattr(agent,'recent_context',lambda phone:{})
+    create=Mock(return_value={'ok':True,'state':'queued'});monkeypatch.setattr(jobs,'create',create)
+    session,tools=asyncio.run(inbound.build_session(BASE,{},SID,OWNER,channel,Memory()))
+    assert {'find_call_contact','call_person','get_requested_call'}<={t.name for t in tools}
+    delegate=next(t for t in tools if t.name=='start_cloud_work')
+    asyncio.run(delegate(title='Requested work',instruction='Use my connected calendar to prepare a brief'))
+    assert create.call_args.args[0]==OWNER
+    assert create.call_args.kwargs['owner_scope'] is True
 
 
 def test_unknown_number_cannot_request_private_owner_scope(monkeypatch):

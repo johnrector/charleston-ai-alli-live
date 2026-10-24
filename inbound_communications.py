@@ -104,8 +104,8 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
     registry=[confirm_identity,remember_contact_name,report_call_outcome]
     if contact_assistance or owner:
         from work_agent import phone_tools,owner_call_tools
-        registry.extend(phone_tools(store.normalize_phone(phone),recognized or ('John Rector' if owner else 'Saved contact'),sid,owner_sms=owner_sms))
-        if owner_sms:registry.extend(owner_call_tools(store.normalize_phone(phone),sid))
+        registry.extend(phone_tools(store.normalize_phone(phone),recognized or ('John Rector' if owner else 'Saved contact'),sid,owner_scope=owner))
+        if owner:registry.extend(owner_call_tools(store.normalize_phone(phone),sid))
     if contact_assistance:registry.append(meeting_time_tool())
     if contact_assistance or owner:
         from promises import tools as promise_tools
@@ -156,12 +156,12 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
     session=session_for(body,base,report_call_outcome,executable_tools=registry)
     # Replace outbound-specific opening/voicemail rules, keep bounded action workflow.
     from call_actions import ACTION_INSTRUCTIONS
-    owner_voice_rules="You are Alli speaking with John on his configured number. Use the OPENING. Do not ask him to confirm his name or continue an old mission. Save messages and requests using report_call_outcome. Only tools listed here are available; if he asks for an unavailable action such as placing a call, say so and save the request without implying a handoff or promising execution."
+    owner_voice_rules="You are Alli speaking with John on his configured number. Use the OPENING. Do not ask him to confirm his name or continue an old mission. Accept clear assignments using the actual listed tools. Save longer account/research/document assignments with start_cloud_work so they continue after he hangs up. Use report_call_outcome for a factual conversation summary; saving a summary alone does not execute his assignment."
     rules=OWNER_SMS_RULES if owner_sms else CONTACT_RULES if contact_assistance else owner_voice_rules if owner else RULES
     if contact_assistance or owner:
         from work_agent import PHONE_RULES
         rules+='\n'+PHONE_RULES
-        if owner_sms:rules+='\nJohn may explicitly delegate a phone call: resolve the verified recipient, use call_person, and report its actual request_id/state. You can start requested calls. General multi-step tasks can use start_cloud_work and connected cloud account tools.'
+        if owner:rules+='\nJohn may explicitly delegate a phone call: resolve the verified recipient, use call_person, and report its actual request_id/state. You can start requested calls. General multi-step tasks can use start_cloud_work and connected cloud account tools. Once the clear assignment is saved, continue in the cloud without waiting for another confirmation or an active conversation.'
     from promises import RULES as PROMISE_RULES
     rules += '\n'+PROMISE_RULES if contact_assistance or owner else ''
     if owner_sms:rules += '\nJohn may ask what needs his attention: use list_open_promises. When he supplies an answer to a saved question, use answer_promise for the correct ID, only at his explicit request. The bound recipient cannot be changed. Say queued until the send receipt is verified.'

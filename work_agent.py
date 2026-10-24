@@ -134,13 +134,14 @@ def decision(wid,approve):
         jobs.event(db,wid,'action_approved' if approve else 'action_denied',dict(tool=approval['arguments'].get('tool_name')))
     return dict(ok=True,work_id=wid,state='queued')
 
-def phone_tools(phone,name,sid,*,owner_sms=False):
+def phone_tools(phone,name,sid,*,owner_scope=False):
+    authorized_owner=bool(owner_scope and jobs.owner(phone))
     @function_tool()
     async def start_cloud_work(title:str,instruction:str) -> dict:
         """Start real cloud research/writing/analysis/document work requested by this caller/texter. Supply the outcome and their relevant context, not a fixed script. Returns queued, never completed. Results go only to this bound sender; no phone argument can redirect them."""
         try:
             context=await asyncio.to_thread(recent_context,phone)
-            return await asyncio.to_thread(jobs.create,phone,name,title,instruction,sid,owner_scope=owner_sms,context=context)
+            return await asyncio.to_thread(jobs.create,phone,name,title,instruction,sid,owner_scope=authorized_owner,context=context)
         except ValueError as exc:return dict(ok=False,error=str(exc))
     @function_tool()
     async def get_my_work() -> dict:
@@ -149,12 +150,12 @@ def phone_tools(phone,name,sid,*,owner_sms=False):
     @function_tool()
     async def continue_cloud_work(work_id:str,answer:str) -> dict:
         """Supply this person's answer/correction to their existing waiting cloud work. Does not approve account actions or John's decisions. Use the ID from get_my_work."""
-        try:return await asyncio.to_thread(resume,work_id.upper(),phone,answer,john=owner_sms)
+        try:return await asyncio.to_thread(resume,work_id.upper(),phone,answer,john=authorized_owner)
         except ValueError as exc:return dict(ok=False,error=str(exc))
     @function_tool()
     async def cancel_cloud_work(work_id:str) -> dict:
         """Cancel this sender's unfinished cloud work only at their request. Already sent work cannot be recalled."""
-        try:return await asyncio.to_thread(jobs.cancel,work_id.upper(),None if owner_sms else phone)
+        try:return await asyncio.to_thread(jobs.cancel,work_id.upper(),None if authorized_owner else phone)
         except ValueError as exc:return dict(ok=False,error=str(exc))
     @function_tool()
     async def remember_work_preference(preference:str) -> dict:
@@ -167,12 +168,13 @@ def owner_call_tools(phone,sid):
     @function_tool()
     async def find_call_contact(name:str) -> dict:
         """Find the verified saved phone/email for a person John wants Alli to call. Does not place a call. Resolve ambiguity before dialing."""
+        if not jobs.owner(phone):return dict(ok=False,error='Owner service unavailable')
         from owner_sms import find_text_contacts
         # Reuse the existing directory lookup, with no guessed recipient.
         return await asyncio.to_thread(find_text_contacts,name)
     @function_tool()
     async def call_person(phone_number:str,recipient_name:str,mission:str,owner_requested:bool=False) -> dict:
-        """Start a call John explicitly requested in this owner SMS conversation, with verified recipient and mission. An accepted call is not answered/completed. No automatic retry or fresh ID after uncertainty. Friends cannot invoke this tool."""
+        """Start a call John explicitly requested in this owner conversation, with verified recipient and mission. An accepted call is not answered/completed. No automatic retry or fresh ID after uncertainty. Friends cannot invoke this tool."""
         if not jobs.owner(phone) or owner_requested is not True or call_executor is None:return dict(ok=False,error='An explicit owner request and connected calling service are required')
         from outbound_profiles import OutboundCall
         target=store.normalize_phone(phone_number)
@@ -320,6 +322,18 @@ def output_details(response):
                     if value not in files:files.append(value)
     return sources,files
 
+def final_output(response):
+    # output_text joins progress messages with the final message. Parse only
+    # the final assistant message, whose content uses the required JSON schema.
+    message=next((x for x in reversed(response.output) if x.type=='message'),None)
+    if message is None:raise ValueError('No verified final work result was produced')
+    text=''.join(x.text for x in message.content if x.type=='output_text')
+    try:value=json.loads(text)
+    except (ValueError,TypeError):raise ValueError('The provider did not return a verified final work result')
+    if not isinstance(value,dict) or value.get('outcome') not in ('completed','partial','blocked') or not isinstance(value.get('result'),str):
+        raise ValueError('The provider did not return a verified final work result')
+    return value
+
 async def run_job(job,client=None):
     from openai import AsyncOpenAI
     from cloud_skills import attachment
@@ -355,7 +369,7 @@ async def run_job(job,client=None):
                     await asyncio.to_thread(jobs.cache_file,job['id'],key,f['filename'],content.content)
             calls=[x for x in response.output if x.type=='function_call']
             if not calls:
-                final=json.loads(response.output_text)
+                final=final_output(response)
                 result=final['result'].strip();outcome=final['outcome']
                 if not result or outcome not in ('completed','partial','blocked'):raise ValueError('No verified final work result was produced')
                 artifacts=[]
