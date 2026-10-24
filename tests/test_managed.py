@@ -1,4 +1,5 @@
 import asyncio
+import json
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
 
@@ -79,6 +80,19 @@ def test_follow_up_reuses_persisted_message_key(setup):
     runtime, _, sessions = setup
     asyncio.run(runtime.follow_up('native1', 'Friday, not Thursday.', 'sms-source-id'))
     assert sessions.events.create.call_args.kwargs['idempotency_key'] == 'sms-source-id'
+
+
+def test_native_followup_schema_accepts_only_user_and_keeps_evidence_as_data(setup):
+    from pydantic import TypeAdapter
+    from openai.types.beta.agent_session_input_param import AgentSessionInputParam
+    runtime,_,sessions=setup
+    asyncio.run(runtime.follow_up('native1','Provider delivered the saved message.','receipt-key',role='developer'))
+    event=sessions.events.create.call_args.kwargs['events'][0]
+    TypeAdapter(AgentSessionInputParam).validate_python(event)
+    content=event['input'][0]
+    assert content['role']=='user'
+    evidence=json.loads(content['content'][0]['text'])
+    assert evidence['new_authorization'] is False and evidence['type']=='application_evidence'
 
 
 def test_default_tool_connection_does_not_accidentally_disable_all_tools():

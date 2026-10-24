@@ -237,7 +237,12 @@ def create_application(settings,repository,carrier,google,api):
             async with asyncio.timeout(limit):
                 await conversation.run(instructions=voice_instructions(repository.profile),context=context)
         except Exception as error:
-            with suppress(Exception):await asyncio.to_thread(calls.error,identifier,type(error).__name__)
+            import traceback
+            frame=traceback.extract_tb(error.__traceback__)[-1]
+            from pathlib import Path
+            diagnostic=type(error).__name__+'@'+Path(frame.filename).name+':'+str(frame.lineno)
+            if isinstance(error,AttributeError) and error.name:diagnostic+=':'+error.name
+            with suppress(Exception):await asyncio.to_thread(calls.error,identifier,diagnostic)
             await channel.close()
 
     @app.post('/inbound/sms')

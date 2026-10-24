@@ -1,5 +1,6 @@
 """Production entrypoint. Models reason at OpenAI; this service handles I/O."""
 import os
+import logging
 
 from openai import AsyncOpenAI
 from twilio.http.http_client import TwilioHttpClient
@@ -21,6 +22,7 @@ def build_application():
     carrier=Carrier(Client(username,password,account_sid=settings.account_sid,
         http_client=TwilioHttpClient(timeout=15,max_retries=0)),account_sid=settings.account_sid,
         auth_token=settings.auth_token,phone=settings.phone,base_url=settings.base_url)
+    logging.getLogger('twilio.http_client').setLevel(logging.WARNING)
     google=GoogleAccount(GoogleTokenStore(repository.connection,settings.google_key.encode(),
         client_id=os.environ['GOOGLE_CLIENT_ID'],client_secret=os.environ['GOOGLE_CLIENT_SECRET']),profile,
         sender_email=os.environ.get('GOOGLE_SENDER_EMAIL') or profile.email_sender or settings.sender_email,

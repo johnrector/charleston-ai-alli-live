@@ -80,3 +80,30 @@ Current limits: inbox reading is not authorized by the existing Google grant;
 local plugins need individual connection validation. No rebuilt real human phone,
 email, calendar write, delayed SMS, native Dot or iPhone login test has passed yet.
 No claim of perfection or complete stability is warranted before those tests.
+
+## First live release and real tests
+
+0a008bd54529d8c6468ff6875a0214c8a85297cf deployed successfully at 21:42 UTC.
+Production native OpenAI Live/managed-MCP and Google Calendar startup probes
+passed. The existing authenticated connector read the new ledger without
+reauthorization. It confirms 57 seeded contacts and the one preserved birthday.
+
+The real incoming ALLI-CLEAN-1024 SMS created the correct private calendar event,
+sent mail as John Rector <john@ai-chs.com> to the configured owner, and scheduled
+and delivered its five-minute text within about two seconds of due time. Calendar
+and received email were independently verified with their connected services.
+Test calendar event ea7460804d9e11cf83f21252e8022d51dfeb9076de still needs cleanup.
+
+The real outgoing owner test reached a human and captured two-way speech, then
+exposed a bridge defect: Live's delegation offset_ms is on the event, not the
+nested delegation. Saved managed-session follow-ups also incorrectly used a
+developer role; the native API accepts only user messages. Both are corrected
+against SDK schemas; delegation tests now use the actual SDK model, and a real
+managed-API evidence follow-up completed successfully. Application evidence
+remains labeled as data, never fresh authorization. The API may return a
+transient 409 while its initial input is pending; retain and retry the same
+saved input key, never recreate the agent. Latest full suite: 77 passed.
+
+Do not claim voice delegation or after-hangup success until retested after the
+correction deploy. The first call's completed carrier status is not a successful
+work test. Existing pending follow-up records must resume, not be discarded.

@@ -2,6 +2,7 @@ import asyncio
 from types import SimpleNamespace as NS
 
 import pytest
+from openai.types.live.delegation_created_event import DelegationCreatedEvent
 
 from alli_core.live import LiveConversation
 from alli_core.profile import Profile
@@ -76,7 +77,8 @@ async def test_audio_stays_full_duplex_and_delegated_work_outlives_hangup():
     call=asyncio.create_task(live.run(instructions=instructions,context={'caller':{'name':'Blake'}}))
     await asyncio.wait_for(live.started.wait(),1)
     await connection.events.put(NS(type='session.input_transcript.delta',delta='Do this after I hang up.',start_ms=0,end_ms=900))
-    event=NS(type='session.delegation.created',delegation=NS(id='delegate1',target='client',offset_ms=900))
+    event=DelegationCreatedEvent(type='session.delegation.created',event_id='sdk-event',offset_ms=900,
+        delegation={'id':'delegate1','target':'client','type':'delegation'})
     await connection.events.put(event); await connection.events.put(event)
     await asyncio.wait_for(working.wait(),1)
     await channel.incoming.put('incoming-audio')
@@ -108,7 +110,8 @@ async def test_results_on_an_open_call_use_original_delegation_id():
     live,connection,channel,hooks,background,instructions=create(backend)
     call=asyncio.create_task(live.run(instructions=instructions,context={}))
     await asyncio.wait_for(live.started.wait(),1)
-    await connection.events.put(NS(type='session.delegation.created',delegation=NS(id='original',target='client',offset_ms=0)))
+    await connection.events.put(DelegationCreatedEvent(type='session.delegation.created',event_id='sdk-event',offset_ms=0,
+        delegation={'id':'original','target':'client','type':'delegation'}))
     await asyncio.wait_for(reported.wait(),1)
     assert connection.comments[-1]['delegation_id']=='original'
     assert connection.comments[-1]['content']=='Verified result.'

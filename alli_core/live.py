@@ -150,7 +150,7 @@ class LiveConversation:
                                 'role': 'user' if event.type == 'session.input_transcript.delta' else 'assistant',
                                 'text': event.delta, 'start_ms': event.start_ms, 'end_ms': event.end_ms})
                         elif event.type == 'session.delegation.created' and event.delegation.target == 'client':
-                            await self.delegate(connection, event.delegation.id,event.delegation.offset_ms)
+                            await self.delegate(connection, event.delegation.id,event.offset_ms)
                         elif event.type == 'error':
                             await self.hooks.error(event.error.code)
                         elif event.type == 'session.closed':

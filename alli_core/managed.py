@@ -4,6 +4,7 @@ The application records dispatch intent before creation and never retries an
 uncertain session creation. Recovery finds its saved session by task metadata.
 """
 import asyncio
+import json
 from dataclasses import dataclass, field
 from typing import Protocol
 from openai import APIStatusError
@@ -113,11 +114,16 @@ class ManagedRuntime:
     async def follow_up(self, session_id, text, submission_key, *, role='user'):
         if role not in {'user','developer'}:
             raise ValueError('Invalid application input role')
+        # The native API accepts user messages only. Keep application evidence
+        # provenance explicit in the content and in the saved input record;
+        # do not send an unsupported developer wire role.
+        content=text if role=='user' else json.dumps({'type':'application_evidence',
+            'new_authorization':False,'text':text},ensure_ascii=False)
         # The caller persists this logical message and key before invoking us.
         await self.api.beta.agents.sessions.events.create(session_id,
             idempotency_key=submission_key, events=[{
                 'type': 'agent.session.input.message',
-                'input': [{'role': role, 'content': [{'type': 'input_text', 'text': text}]}]}])
+                'input': [{'role': 'user', 'content': [{'type': 'input_text', 'text': content}]}]}])
 
     async def inspect(self, task_id):
         sid = await asyncio.to_thread(self.store.session_id, task_id)
