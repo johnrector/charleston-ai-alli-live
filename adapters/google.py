@@ -12,17 +12,7 @@ from html.parser import HTMLParser
 from cryptography.fernet import Fernet
 from google.auth.transport.requests import AuthorizedSession
 from google.oauth2.credentials import Credentials
-
-
-class ProviderRejected(ValueError):
-    """A definitive provider rejection, rather than an unconfirmed write."""
-    def __init__(self,status,code):
-        self.status,self.code=status,code
-        super().__init__(f'Google rejected the operation ({status}: {code})')
-
-
-class InvalidInput(ValueError):
-    pass
+from .errors import InvalidInput,ProviderRejected
 
 
 class GoogleTokenStore:

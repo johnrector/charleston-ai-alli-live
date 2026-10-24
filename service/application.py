@@ -18,6 +18,7 @@ from adapters.owner_mcp import create_owner_server,owner_http_app
 from adapters.events import Events
 from adapters.computer import Computer
 from adapters.account_connections import AccountConnections
+from adapters.shopify import ShopifyAccount
 from adapters.bootstrap import seed_existing_records,preserve_birthday
 from adapters.telephony import MediaChannel
 from alli_core.authority import Actor,Conflict,PermissionDenied
@@ -55,10 +56,11 @@ def create_application(settings,repository,carrier,google,api):
     runtime=ManagedRuntime(api,repository.profile,repository)
     computer=Computer.configured(repository,api)
     connections=AccountConnections(repository,settings.google_key.encode(),settings.base_url)
+    shopify=ShopifyAccount(connections)
     worker=Worker(repository,runtime,outbox,carrier,settings.base_url,calls=calls,computer=computer,
-                  release=settings.release,connections=connections)
+                  release=settings.release)
     tools=tool_http_app(create_tool_server(repository,settings.base_url,
-        google=google,deliveries=outbox,calls=calls,carrier=carrier,computer=computer,connections=connections),settings.base_url)
+        google=google,shopify=shopify,deliveries=outbox,calls=calls,carrier=carrier,computer=computer,connections=connections),settings.base_url)
     oauth=OwnerOAuth(repository,settings.base_url,settings.session_secret,settings.google_key.encode())
     events=Events(repository,settings.google_key.encode(),settings.base_url)
     owner_tools=owner_http_app(create_owner_server(repository,calls,outbox,oauth,events),settings.base_url)
@@ -119,7 +121,7 @@ def create_application(settings,repository,carrier,google,api):
     app.state.events=events
     app.add_middleware(ToolSurface,tools=tools,owner=owner_tools)
     app.include_router(dashboard_router(settings,repository,sessions,carrier,outbox))
-    app.include_router(account_router(settings,repository,sessions,connections,google,api))
+    app.include_router(account_router(settings,repository,sessions,connections,google,shopify))
 
     @app.exception_handler(PermissionDenied)
     async def denied(request:Request,error):

@@ -1,6 +1,3 @@
-from dataclasses import replace
-from types import SimpleNamespace as NS
-from unittest.mock import AsyncMock
 from urllib.parse import parse_qs,urlsplit
 import json
 import base64
@@ -10,8 +7,9 @@ from fastapi import FastAPI
 import httpx
 import pytest
 
-from adapters.account_connections import AccountConnections,GOOGLE_SCOPES,SHOPIFY_READ_TOOLS
+from adapters.account_connections import AccountConnections,GOOGLE_SCOPES
 from adapters.google import GoogleAccount,GoogleTokenStore,mail_text
+from adapters.shopify import ShopifyAccount
 from adapters.owner_sessions import OwnerSessions
 from adapters.postgres import PostgresRepository
 from alli_core.authority import Actor,PermissionDenied
@@ -34,16 +32,14 @@ def setup(database):
     connections=AccountConnections(repo,key,'https://testserver')
     google=GoogleAccount(GoogleTokenStore(repo.connection,key,client_id='client',client_secret='client-secret'),
         repo.profile,sender_email='owner@example.com',owner_email='owner@example.com')
-    api=NS(beta=NS(agents=NS(vaults=NS(create=AsyncMock(return_value=NS(id='vault1')),
-        credentials=NS(create=AsyncMock(return_value=NS(id='credential1')))))))
     settings=Settings('https://testserver','+18435550100','+18435550999','AC-test',database,'carrier',
         'session-secret',key.decode(),background=False)
-    app=FastAPI();app.include_router(account_router(settings,repo,sessions,connections,google,api))
-    return repo,actor,connections,google,sessions,cookie,app,api
+    app=FastAPI();app.include_router(account_router(settings,repo,sessions,connections,google,ShopifyAccount(connections)))
+    return repo,actor,connections,google,sessions,cookie,app
 
 
 def test_oauth_state_is_owner_bound_single_use_and_survives_restart(setup):
-    repo,owner,links,_,sessions,cookie,_,_=setup
+    repo,owner,links,_,sessions,cookie,_=setup
     digest=sessions.digest(cookie)
     state,verifier=links.begin(owner,'shopify',digest)
     other=AccountConnections(repo,base64.urlsafe_b64encode(b't'*32),'https://testserver')
@@ -55,36 +51,34 @@ def test_oauth_state_is_owner_bound_single_use_and_survives_restart(setup):
     with pytest.raises(ValueError):links.consume('google',state,digest)
 
 
-def test_cloud_vault_is_never_attached_to_friend_or_limited_mission(setup):
+def test_only_owner_can_replace_cloud_connections_or_private_credentials(setup):
     repo,owner,links,*_=setup
-    links.save(owner,'shopify',{'vault_id':'vault1','credential_id':'cred1'})
+    links.save(owner,'shopify',{'store':'Store'},secret={'client_secret':'private-store-secret'})
     person=repo.save_person(owner,name='Friend',phone='+18435550101')
     repo.set_person_status(owner,str(person['id']),'approved',person['revision'])
     friend=Actor('alli',str(person['id']),'sms')
-    with pytest.raises(PermissionDenied):links.save(friend,'shopify',{'vault_id':'stolen'})
-    tasks=[repo.submit(a,source_id=str(i),title='Read store',instruction='Read orders')
-        for i,a in enumerate((owner,friend,replace(owner,allowed_tools=('get_context',))))]
-    assert links.for_task(tasks[1]['id'])==[] and links.for_task(tasks[2]['id'])==[]
-    allowed=links.for_task(tasks[0]['id'])
-    assert allowed[0]['vault_id']=='vault1'
-    assert 'graphql_mutation' not in allowed[0]['tool']['allowed_tools']
-    assert 'list-orders' in SHOPIFY_READ_TOOLS
-    assert 'authorization' not in allowed[0]['tool']['transport']
+    with pytest.raises(PermissionDenied):links.save(friend,'shopify',{'store':'Wrong'},secret={'client_secret':'stolen'})
+    assert links.get('shopify')=={'store':'Store'}
+    with repo.connection() as db:
+        sealed=db.execute("SELECT sealed FROM ea_account_secret WHERE provider='shopify'").fetchone()['sealed']
+    assert 'private-store-secret' not in sealed
+    assert 'private-store-secret' not in json.dumps(repo.ledger(owner),default=str)
+    assert json.loads(links.cipher.decrypt(sealed.encode()))['client_secret']=='private-store-secret'
 
 
 @pytest.mark.asyncio
 async def test_connection_forms_require_owner_origin_csrf_and_use_pkce(setup):
-    _,_,links,_,sessions,cookie,app,_=setup
+    _,_,links,_,sessions,cookie,app=setup
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url='https://testserver') as http:
         assert (await http.get('/dashboard/connections')).status_code==303
-        meta=(await http.get('/connections/shopify/client.json')).json()
-        assert meta['client_id']==links.shopify_client_id and meta['token_endpoint_auth_method']=='none'
+        assert (await http.get('/connections/shopify/client.json')).status_code==404
         http.cookies.set('alli_owner_session',cookie)
         account_page=await http.get('/dashboard/connections')
         policy=account_page.headers['content-security-policy']
-        assert "form-action 'self' https://accounts.google.com https://setup.shopify.com;" in policy
+        assert "form-action 'self' https://accounts.google.com;" in policy
+        assert 'name="client_secret"' in account_page.text and 'read_orders' in account_page.text
         assert (await http.post('/dashboard/connections/google/connect',data={'csrf':sessions.csrf(cookie)})).status_code==403
-        for provider in ('google','shopify'):
+        for provider in ('google',):
             response=await http.post('/dashboard/connections/'+provider+'/connect',
                 data={'csrf':sessions.csrf(cookie)},headers={'Origin':'https://testserver'})
             params=parse_qs(urlsplit(response.headers['location']).query)
@@ -97,7 +91,7 @@ async def test_connection_forms_require_owner_origin_csrf_and_use_pkce(setup):
 
 @pytest.mark.asyncio
 async def test_verified_google_grant_is_atomic_and_wrong_account_keeps_old_token(setup,monkeypatch):
-    repo,owner,links,google,sessions,cookie,app,_=setup
+    repo,owner,links,google,sessions,cookie,app=setup
     real_async,real_sync=httpx.AsyncClient,httpx.Client
     state,verifier=links.begin(owner,'google',sessions.digest(cookie))
     email=['wrong@example.com']
@@ -123,27 +117,26 @@ async def test_verified_google_grant_is_atomic_and_wrong_account_keeps_old_token
 
 
 @pytest.mark.asyncio
-async def test_shopify_oauth_checks_store_then_stores_grant_only_in_openai_vault(setup,monkeypatch):
-    repo,owner,links,_,sessions,cookie,app,api=setup
-    state,_=links.begin(owner,'shopify',sessions.digest(cookie))
-    real_async=httpx.AsyncClient
+async def test_shopify_store_app_form_verifies_then_encrypts_without_vault_or_redirect(setup,monkeypatch):
+    repo,owner,links,_,sessions,cookie,app=setup
+    real_async,real_sync=httpx.AsyncClient,httpx.Client
     def provider(request):
-        if request.url.path=='/oauth/token':return httpx.Response(200,json={
-            'access_token':'private-access','refresh_token':'private-refresh','expires_in':3600,'scope':'read_all_orders'})
-        payload=json.loads(request.content)
-        info={'name':'Configured store','domain':repo.profile.shop_domain} if payload['params']['name']=='get-shop-info' else {'orders':[]}
-        return httpx.Response(200,json={'jsonrpc':'2.0','id':1,'result':{'structuredContent':info}})
-    monkeypatch.setattr(httpx,'AsyncClient',lambda **kwargs:real_async(transport=httpx.MockTransport(provider),**kwargs))
+        if request.url.path=='/admin/oauth/access_token':return httpx.Response(200,json={
+            'access_token':'private-access','expires_in':86399,'scope':'read_orders'})
+        assert request.url.path=='/admin/api/2026-10/graphql.json'
+        return httpx.Response(200,json={'data':{'shop':{'name':'Configured store',
+            'myshopifyDomain':'red604.myshopify.com','primaryDomain':{'host':repo.profile.shop_domain}},
+            'orders':{'nodes':[]},'currentAppInstallation':{'accessScopes':[{'handle':'read_orders'}]}}})
+    monkeypatch.setattr(httpx,'Client',lambda **kwargs:real_sync(transport=httpx.MockTransport(provider),**kwargs))
     async with real_async(transport=httpx.ASGITransport(app),base_url='https://testserver',
                           cookies={'alli_owner_session':cookie}) as http:
-        response=await http.get('/connections/shopify/callback',params={'state':state,'code':'private-code'})
+        args={'csrf':sessions.csrf(cookie),'shop':'red604.myshopify.com',
+            'client_id':'app-client-id-123456','client_secret':'private-client-secret-123456'}
+        assert (await http.post('/dashboard/connections/shopify/connect',data=args)).status_code==403
+        response=await http.post('/dashboard/connections/shopify/connect',data=args,
+            headers={'Origin':'https://testserver'})
         assert response.status_code==303
     saved=links.get('shopify')
-    assert saved['credential_id']=='credential1' and saved['vault_id']=='vault1'
-    assert 'private-access' not in json.dumps(saved) and 'private-refresh' not in json.dumps(repo.ledger(owner),default=str)
-    arguments=api.beta.agents.vaults.credentials.create.call_args.kwargs
-    from pydantic import TypeAdapter
-    from openai.types.beta.agents.vaults.credential_create_params import CredentialCreateParams
-    TypeAdapter(CredentialCreateParams).validate_python(arguments)
-    assert arguments['auth']['refresh']['token_endpoint_auth']=={'type':'none'}
-    assert arguments['auth']['access_token']=='private-access'
+    assert saved['shop']=='red604.myshopify.com' and saved['scopes']==['read_orders']
+    assert 'private-access' not in json.dumps(saved) and 'private-client-secret' not in json.dumps(repo.ledger(owner),default=str)
+    assert ShopifyAccount(links).credentials()['access_token']=='private-access'

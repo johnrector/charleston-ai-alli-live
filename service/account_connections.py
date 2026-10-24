@@ -1,6 +1,6 @@
 """Provider consent is performed by the owner; cloud credentials stay private."""
 import asyncio
-from datetime import datetime,timedelta,timezone
+from datetime import datetime,timezone
 import hmac
 
 import httpx
@@ -8,14 +8,15 @@ from fastapi import APIRouter,HTTPException,Request
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token
 from google_auth_oauthlib.flow import Flow
-from starlette.responses import JSONResponse,RedirectResponse
+from starlette.responses import RedirectResponse
 
-from adapters.account_connections import GOOGLE_SCOPES,SHOPIFY_MCP,SHOPIFY_TOKEN
+from adapters.account_connections import GOOGLE_SCOPES
+from adapters.errors import InvalidInput,ProviderRejected
 from .dashboard import SESSION
 from .web_helpers import escape as e,form,page
 
 
-def account_router(settings,repository,sessions,connections,google,api):
+def account_router(settings,repository,sessions,connections,google,shopify):
     router=APIRouter()
 
     async def owner(request):
@@ -31,23 +32,37 @@ def account_router(settings,repository,sessions,connections,google,api):
         content='<h1>Alli’s cloud connections.</h1><p>These accounts work when your Mac is off. Account access belongs to John; approved friends do not receive private mailbox or store access.</p>'
         for provider,label,description in (
             ('google','Google Calendar & Gmail','Calendar access and email sending, plus mailbox search and reading.'),
-            ('shopify','Shopify','Read store information, orders, shipping addresses and inventory through Shopify’s MCP server.')):
+            ('shopify','Shopify','Read store information, orders, shipping addresses and inventory in the cloud.')):
             linked=await asyncio.to_thread(connections.get,provider)
             content+='<section><h2>'+label+'</h2><p>'+description+'</p><p>'
             content+=('Authorized: '+e(linked.get('account') or linked.get('store') or '')+
                       ' · '+e(linked.get('verified_at',''))) if linked else 'Additional cloud authorization needed.'
-            if provider=='shopify' and not linked:
-                content+='</p><p>The store-app connection is being completed.</p></section>'
-                continue
             content+='</p><form method="post" action="/dashboard/connections/'+provider+'/connect">'
             content+='<input type="hidden" name="csrf" value="'+e(sessions.csrf(request.cookies.get(SESSION,'')))+'">'
+            if provider=='shopify':
+                content+='''<p>One-time setup for your own Shopify store. Alli renews access automatically in the cloud.
+                Store operations through this connection are read-only. Credentials are encrypted and never placed in model instructions.</p>
+                <details><summary>Set up the Shopify app</summary><ol>
+                <li>Open <a href="https://dev.shopify.com/" target="_blank" rel="noopener noreferrer">Shopify’s Dev Dashboard</a>
+                and select the organization that owns '''+e(repository.profile.shop_domain or 'your store')+'''.</li>
+                <li>Create an app named <strong>'''+e(repository.profile.name)+''' Cloud</strong>. On its version, set the app URL to
+                <code>'''+e(settings.base_url)+'''/dashboard/connections</code> and turn off embedding in Shopify admin.</li>
+                <li>Choose these read permissions: <code>read_orders, read_products, read_inventory, read_locations</code>.
+                Release the version and install it on your store.</li>
+                <li>In the app’s Settings, copy its Client ID and Client secret into the fields below.
+                Do not send the secret in chat or email.</li></ol>
+                <p>The app and store must belong to the same Shopify organization.
+                <a href="https://shopify.dev/docs/apps/build/authentication-authorization/client-credentials-grant" target="_blank" rel="noopener noreferrer">Shopify’s own-store connection instructions</a></p></details>'''
+                content+='<label>Store hostname<input name="shop" required maxlength="100" autocomplete="off" value="'+e((linked or {}).get('shop') or repository.profile.shop_admin_domain)+'"></label>'
+                content+='<label>App Client ID<input name="client_id" required maxlength="1024" autocomplete="off" spellcheck="false"></label>'
+                content+='<label>App Client secret<input type="password" name="client_secret" required maxlength="1024" autocomplete="off" spellcheck="false"></label>'
             content+='<button>'+('Reconnect ' if linked else 'Connect ')+label+'</button></form></section>'
         response=page('Connections',content)
         # Browsers apply form-action to the POST's redirect as well. Keep
         # unrelated dashboard forms restricted to self; authorize these exact
         # provider origins only on the connection page.
         response.headers['Content-Security-Policy']=response.headers['Content-Security-Policy'].replace(
-            "form-action 'self';","form-action 'self' https://accounts.google.com https://setup.shopify.com;")
+            "form-action 'self';","form-action 'self' https://accounts.google.com;")
         return response
 
     def google_flow(state,verifier):
@@ -65,16 +80,21 @@ def account_router(settings,repository,sessions,connections,google,api):
             raise HTTPException(403,'Use the Connections page to authorize this account')
         if provider not in {'google','shopify'} or provider=='google' and google is None:
             raise HTTPException(404)
-        state,verifier=await asyncio.to_thread(connections.begin,actor,provider,digest(request))
         if provider=='google':
+            state,verifier=await asyncio.to_thread(connections.begin,actor,provider,digest(request))
             url,_=google_flow(state,verifier).authorization_url(access_type='offline',prompt='consent',
                 include_granted_scopes='true',login_hint=google.owner_email,nonce=state)
-        else:url=connections.shopify_authorization(state,verifier)
-        return RedirectResponse(url,303,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
-
-    @router.get('/connections/shopify/client.json')
-    async def client_metadata():
-        return JSONResponse(connections.client_metadata(),headers={'Cache-Control':'public, max-age=300'})
+            return RedirectResponse(url,303,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+        try:
+            await asyncio.to_thread(shopify.connect,actor,data.get('shop',''),data.get('client_id',''),data.get('client_secret',''))
+        except (InvalidInput,ProviderRejected) as error:
+            await asyncio.to_thread(connections.failed,actor,'shopify','store_app',error)
+            return page('Shopify connection incomplete','<h1>Shopify connection incomplete.</h1><p>'+e(str(error))+
+                '</p><p>Confirm the app is released and installed on the store, with the listed read permissions. Existing connections are retained.</p><p><a href="/dashboard/connections">Return to Connections</a></p>',status=400)
+        except Exception as error:
+            await asyncio.to_thread(connections.failed,actor,'shopify','store_app',error)
+            return page('Shopify connection incomplete','<h1>Shopify connection incomplete.</h1><p>The store connection could not be verified. Your earlier connection is retained. Try again from Connections.</p><a href="/dashboard/connections">Connections</a>',status=400)
+        return RedirectResponse('/dashboard/connections',303,headers={'Cache-Control':'no-store'})
 
     def verify_google(tokens,state):
         identity=id_token.verify_oauth2_token(tokens.get('id_token',''),GoogleRequest(),google.tokens.client_id)
@@ -121,68 +141,6 @@ def account_router(settings,repository,sessions,connections,google,api):
         except Exception as error:
             await asyncio.to_thread(connections.failed,actor,'google',stage,error)
             return page('Connection incomplete','<h1>Google connection incomplete.</h1><p>The account, required permissions or authorization could not be verified. Your earlier connection is retained. Start again from Connections and grant the listed permissions.</p><p><a href="/dashboard/connections">Connections</a></p>',status=400)
-        return RedirectResponse('/dashboard/connections',303,headers={'Cache-Control':'no-store'})
-
-    async def shopify_call(token,name,arguments):
-        async with httpx.AsyncClient(timeout=20,follow_redirects=False) as http:
-            result=await http.post(SHOPIFY_MCP,headers={'Authorization':'Bearer '+token,
-                'Accept':'application/json, text/event-stream'},json={
-                'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':name,'arguments':arguments}})
-            result.raise_for_status();body=result.json()
-        payload=body.get('result',{})
-        if body.get('error') or payload.get('isError'):raise ValueError('Shopify account check failed')
-        return payload
-
-    @router.get('/connections/shopify/callback')
-    async def shopify_callback(request:Request):
-        import json
-        actor=await owner(request)
-        stage='state'
-        try:
-            state=request.query_params.get('state','')
-            verifier=await asyncio.to_thread(connections.consume,'shopify',state,digest(request))
-            if request.query_params.get('error') or not request.query_params.get('code'):
-                raise ValueError('Authorization was not completed')
-            async with httpx.AsyncClient(timeout=20,follow_redirects=False) as http:
-                stage='token_exchange'
-                response=await http.post(SHOPIFY_TOKEN,data={'grant_type':'authorization_code',
-                    'code':request.query_params['code'],'code_verifier':verifier,
-                    'client_id':connections.shopify_client_id,'resource':SHOPIFY_MCP,
-                    'redirect_uri':settings.base_url+'/connections/shopify/callback'})
-                response.raise_for_status();grant=response.json()
-            if not grant.get('refresh_token') or not grant.get('access_token'):
-                raise ValueError('Offline Shopify authorization is required')
-            stage='store_verification'
-            payload=await shopify_call(grant['access_token'],'get-shop-info',{})
-            info=payload.get('structuredContent')
-            if not info:
-                info=next((json.loads(item['text']) for item in payload.get('content',[])
-                    if item.get('type')=='text' and item.get('text','').lstrip().startswith('{')),None)
-            if not info or (repository.profile.shop_domain and
-                info.get('domain','').casefold()!=repository.profile.shop_domain.casefold()):
-                raise ValueError('The chosen Shopify store does not match the configured store')
-            await shopify_call(grant['access_token'],'list-orders',{'first':1,'query':'fulfillment_status:unfulfilled'})
-            stage='cloud_vault'
-            prior=await asyncio.to_thread(connections.get,'shopify')
-            if prior:vault_id=prior['vault_id']
-            else:
-                vault=await api.beta.agents.vaults.create(name=repository.profile.name+' Shopify',
-                    metadata={'assistant_id':repository.profile.id,'provider':'shopify'})
-                vault_id=vault.id
-            expiry=({'expires_at':(datetime.now(timezone.utc)+timedelta(seconds=int(grant['expires_in']))).isoformat()}
-                    if grant.get('expires_in') else {})
-            credential=await api.beta.agents.vaults.credentials.create(vault_id,name='Shopify cloud OAuth',
-                auth={'type':'mcp_oauth','mcp_server_url':SHOPIFY_MCP,'access_token':grant['access_token'],**expiry,
-                    'refresh':{'token_endpoint':SHOPIFY_TOKEN,'client_id':connections.shopify_client_id,
-                        'refresh_token':grant['refresh_token'],'token_endpoint_auth':{'type':'none'}}})
-            stage='save'
-            await asyncio.to_thread(connections.save,actor,'shopify',{'vault_id':vault_id,
-                'credential_id':credential.id,'server_url':SHOPIFY_MCP,'store':info.get('name',''),
-                'domain':info.get('domain',''),'scopes':grant.get('scope','read_all_orders').split(),
-                'verified_at':datetime.now(timezone.utc).isoformat()})
-        except Exception as error:
-            await asyncio.to_thread(connections.failed,actor,'shopify',stage,error)
-            return page('Connection incomplete','<h1>Shopify connection incomplete.</h1><p>The store, offline authorization or cloud credential could not be verified. Your earlier connection is retained. Select your configured store when authorizing.</p><p><a href="/dashboard/connections">Connections</a></p>',status=400)
         return RedirectResponse('/dashboard/connections',303,headers={'Cache-Control':'no-store'})
 
     return router

@@ -9,5 +9,6 @@ mcp==2.3.0
 phonenumbers==9.0.40
 google-auth>=2.40,<3
 google-auth-oauthlib==1.5.0
+graphql-core==3.2.13
 PyJWT>=2.10,<3
 standardwebhooks==1.1.0

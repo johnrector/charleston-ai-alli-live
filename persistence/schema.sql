@@ -328,3 +328,10 @@ CREATE TABLE IF NOT EXISTS ea_account_oauth_flow (
     expires_at timestamptz NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE TABLE IF NOT EXISTS ea_account_secret (
+    assistant_id text NOT NULL REFERENCES ea_assistant(id),
+    provider text NOT NULL CHECK(provider IN ('shopify')),
+    sealed text NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY(assistant_id,provider)
+);

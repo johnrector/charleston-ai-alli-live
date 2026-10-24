@@ -2,6 +2,7 @@ id = "alli"
 name = "Alli"
 email_sender = "john@ai-chs.com"
 shop_domain = "rainbowfulfillment.com"
+shop_admin_domain = "red604.myshopify.com"
 facts_reviewed_at = "2026-10-24"
 public_facts = """
 John Rector is a Charleston entrepreneur, author, AI teacher and co-founder of Charleston AI.

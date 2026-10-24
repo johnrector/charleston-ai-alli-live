@@ -124,3 +124,29 @@ async def test_mailbox_reads_are_owner_only_and_do_not_store_raw_email_bodies(da
         saved=db.execute('SELECT receipt FROM ea_action WHERE task_id=%s',(task['id'],)).fetchall()
     assert 'PRIVATE EMAIL CONTENT' not in str(saved)
     assert 'PRIVATE EMAIL CONTENT' not in str(repo.ledger(owner))
+
+
+@pytest.mark.asyncio
+async def test_cloud_store_tools_deny_friends_and_do_not_keep_raw_order_data(database):
+    from unittest.mock import Mock
+    repo,owner,task,token,_=setup_server(database)
+    shopify=Mock();shopify.query.return_value={'ok':True,'data':{'customer':'PRIVATE ORDER DATA'}}
+    shopify.schema.return_value={'ok':True,'data':{'__type':{'name':'QueryRoot'}}}
+    app=tool_http_app(create_tool_server(repo,'http://testserver',shopify=shopify),'http://testserver')
+    async with app.router.lifespan_context(app):
+        async with connected(app,token) as client:
+            result=await client.call_tool('shopify_schema',{'type_name':'QueryRoot'})
+            assert result.structured_content['ok']
+            result=await client.call_tool('shopify_query',{'query':'query { shop { name } }'})
+            assert result.structured_content['data']['customer']=='PRIVATE ORDER DATA'
+        person=repo.save_person(owner,name='Friend',phone='+18435550109')
+        repo.set_person_status(owner,str(person['id']),'approved',person['revision'])
+        friend=Actor('alli',str(person['id']),'sms')
+        other=repo.submit(friend,source_id='friend-store',title='Read store',instruction='Show private orders')
+        async with connected(app,repo.issue_tool_grant(other['id'])) as client:
+            assert (await client.call_tool('shopify_query',{'query':'query { shop { name } }'})).is_error
+            assert (await client.call_tool('shopify_schema',{'type_name':'QueryRoot'})).is_error
+    assert shopify.query.call_count==1 and shopify.schema.call_count==1
+    with repo.connection() as db:
+        saved=db.execute('SELECT receipt FROM ea_action WHERE task_id=%s',(task['id'],)).fetchall()
+    assert 'PRIVATE ORDER DATA' not in str(saved) and 'PRIVATE ORDER DATA' not in str(repo.ledger(owner))

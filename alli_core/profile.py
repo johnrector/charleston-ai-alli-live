@@ -20,6 +20,7 @@ class Profile:
     public_facts: str = ''
     facts_reviewed_at: str = ''
     shop_domain: str = ''
+    shop_admin_domain: str = ''
 
     @classmethod
     def load(cls, path: str | Path):

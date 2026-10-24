@@ -17,13 +17,12 @@ log=logging.getLogger(__name__)
 
 
 class Worker:
-    def __init__(self,repository,runtime,outbox,carrier,base_url,*,calls=None,computer=None,release='',connections=None):
+    def __init__(self,repository,runtime,outbox,carrier,base_url,*,calls=None,computer=None,release=''):
         self.repository,self.runtime,self.outbox,self.carrier=repository,runtime,outbox,carrier
         self.base_url=base_url.rstrip('/')
         self.calls=calls
         self.computer=computer
         self.release=release
-        self.connections=connections
         self.stopping=asyncio.Event()
 
     async def dispatch(self,task):
@@ -40,10 +39,8 @@ class Worker:
         assignment=Assignment(task['id'],task['instruction'],
             'First read get_context for the authenticated requester, received date and relevant history. '
             'Finish the delegated work using authorized tools; routine work needs no further confirmation.')
-        linked=await asyncio.to_thread(self.connections.for_task,task['id']) if self.connections else []
-        options={'cloud_connections':linked} if linked else {}
-        if execution is None:await self.runtime.dispatch(assignment,connection,**options)
-        else:await self.runtime.dispatch(assignment,connection,execution,**options)
+        if execution is None:await self.runtime.dispatch(assignment,connection)
+        else:await self.runtime.dispatch(assignment,connection,execution)
 
     async def observe(self,task):
         if not task['session_id']:
