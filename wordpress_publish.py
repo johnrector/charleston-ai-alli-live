@@ -74,8 +74,12 @@ async def wp(job,operation,params,client,*,key=''):
     owner_only(job)
     if operation not in {'posts.list','posts.get','posts.create','posts.update','media.get','media.create','categories.list','tags.list'}:raise ValueError('This WordPress operation is outside the article publisher')
     from cloud_runtime import runtime
-    candidates=[n for n in runtime.tools if n.endswith('wpcom_mcp_content_authoring')]
-    if runtime.state!='connected' or len(candidates)!=1:raise ValueError('The existing cloud WordPress connection is not available; do not fall back to Mac credentials')
+    if runtime.state in ('starting','waiting_for_previous_instance'):
+        await asyncio.to_thread(__import__('cloud_calls').defer,job['id'])
+    candidates=[n for n in runtime.tools if n.lower().replace('-','_').endswith('wpcom_mcp_content_authoring')]
+    if runtime.state!='connected' or len(candidates)!=1:
+        with store.connection() as db:jobs.event(db,job['id'],'wordpress_connection_diagnostic',dict(state=runtime.state,candidates=[n for n in runtime.tools if 'wpcom' in n.lower() or 'wordpress' in n.lower()]))
+        raise ValueError('The existing cloud WordPress connection is not available; do not fall back to Mac credentials')
     args=dict(action='execute',operation=operation,wpcom_site=SITE,params=params)
     write=operation in {'posts.create','posts.update','media.create'}
     if write:
