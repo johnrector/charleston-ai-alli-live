@@ -194,6 +194,24 @@ def test_readback_can_reconcile_only_the_bound_call(service, monkeypatch):
     assert asyncio.run(adapter.read_result('missing'))['status']=='not_found'
     assert seen==['CA-bound']
 
+def test_provider_diagnostics_read_exact_route_and_safe_error_codes(service,monkeypatch):
+    import twilio.rest
+    _,adapter,_,_=service
+    seen=[]
+    call=SimpleNamespace(status='completed',answered_by='machine_start',duration='4',
+                         to='+12025550123',from_='+15555550100',direction='outbound-api')
+    def calls(sid):
+        seen.append(sid)
+        return SimpleNamespace(fetch=lambda:call,notifications=SimpleNamespace(list=lambda **kw:[
+            SimpleNamespace(error_code='11200',request_url='https://secret.example/token',response_body='private')]))
+    client=SimpleNamespace(calls=calls,incoming_phone_numbers=SimpleNamespace(list=lambda **kw:[]))
+    monkeypatch.setattr(twilio.rest,'Client',lambda *args,**kwargs:client)
+    result=adapter._provider_details('CA-bound')
+    assert seen==['CA-bound','CA-bound']
+    assert result['provider_route']=={'to':call.to,'from':call.from_,'direction':'outbound-api'}
+    assert result['provider_errors']==[{'code':'11200'}]
+    assert 'secret.example' not in str(result) and 'private' not in str(result)
+
 
 def test_fresh_validation_after_claim_blocks_without_dial(service,monkeypatch):
     voice,adapter,store,body=service

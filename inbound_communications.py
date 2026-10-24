@@ -339,7 +339,9 @@ class InboundCommunications:
         messages=[{'role':'user','content':row['body']}]
         api=client or AsyncOpenAI(timeout=90,max_retries=0)
         try:
-            for step in range(4):
+            # Serial tool use needs room for recipient lookup, writes and read-back
+            # across a normal multi-action assignment, plus a final reply.
+            for step in range(16):
                 await asyncio.to_thread(security.model,row['phone'],'sms:'+row['sid']+':'+str(step),8192)
                 response=await api.responses.create(model=self.base['delegation']['responses']['model'],
                     reasoning=session['delegation']['responses']['reasoning'],
@@ -369,7 +371,16 @@ class InboundCommunications:
                         try:result=await by_name[call.name](**json.loads(call.arguments))
                         except Exception:result={'ok':False,'error':'Action failed or is uncertain. Do not retry a write; report for John.'}
                     messages.append({'type':'function_call_output','call_id':call.call_id,'output':json.dumps(result)})
-            raise ValueError('SMS reasoning limit reached')
+            # Close the conversation without allowing any more writes. Preserve
+            # receipts in this same history so partial completion is explicit.
+            budget_key='sms:'+row['sid']+':summary'
+            await asyncio.to_thread(security.model,row['phone'],budget_key,2048)
+            response=await api.responses.create(model=self.base['delegation']['responses']['model'],
+                reasoning=session['delegation']['responses']['reasoning'],
+                instructions=session['instructions']+' SMS: processing limit reached. In plain text, summarize only actions confirmed by the tool receipts above and clearly name anything unfinished or uncertain. Do not claim an unconfirmed action succeeded. No more tools are available. Do not ask the sender to repeat completed actions.',
+                input=messages,tools=[],parallel_tool_calls=False,max_output_tokens=2048,store=False)
+            await asyncio.to_thread(security.settle_model,budget_key,getattr(response.usage,'output_tokens',None) if getattr(response,'usage',None) else None)
+            return response.output_text.strip()[:1500] or 'I reached a processing limit before finishing every step. The request and action receipts are saved for review; please do not resend the entire request.'
         except security.Limited:
             return 'I hit a temporary usage limit before finishing this request. It is saved for John to review.'
         finally:
@@ -501,6 +512,16 @@ class InboundCommunications:
         @app.post('/inbound/fallback',dependencies=[Depends(http_sig)])
         async def fallback(request:Request):
             form=await request.form();sid,_=self.validate(form,'voice')
+            # Connect's action also runs when a caller hangs up normally. Verify
+            # terminal status before labeling a successful conversation a failure.
+            call_status=str(form.get('CallStatus',''))
+            if call_status!='completed' and not form.get('StreamError'):
+                with contextlib.suppress(Exception):
+                    call=await asyncio.to_thread(lambda:self.client().calls(sid).fetch())
+                    call_status=call.status
+            if call_status=='completed' and not form.get('StreamError'):
+                await asyncio.to_thread(self.store.finish,sid,'completed')
+                return Response('<Response/>',media_type='text/xml')
             await asyncio.to_thread(self.store.finish,sid,'fallback')
             response=VoiceResponse();response.say('I could not continue this call. Please text Alli at this number and I can help there.');response.hangup()
             return Response(str(response),media_type='text/xml')

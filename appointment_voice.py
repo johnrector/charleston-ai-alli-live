@@ -241,6 +241,13 @@ class OutboundVoice:
         call = client.calls(call_sid).fetch()
         details = {'provider_lookup': 'verified', 'provider_status': call.status,
                    'answered_by': call.answered_by, 'duration_seconds': call.duration}
+        # Inspect only this claimed call. Routing and error codes distinguish
+        # app failures from a carrier/mailbox answering before a handset rings.
+        details['provider_route'] = {'to': call.to, 'from': call.from_, 'direction': call.direction}
+        try:
+            details['provider_errors'] = [{'code': n.error_code} for n in client.calls(call_sid).notifications.list(limit=10)]
+        except Exception:
+            details['provider_errors_lookup'] = 'unavailable'
         try:
             numbers = client.incoming_phone_numbers.list(phone_number=self.tac.config.phone_number, limit=2)
             if len(numbers) == 1:

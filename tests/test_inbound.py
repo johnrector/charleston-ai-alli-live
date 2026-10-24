@@ -141,6 +141,75 @@ def json_result(value):
     import json
     return json.loads(value['output'])
 
+def test_sms_multi_action_assignment_completes_without_replaying_writes(service,monkeypatch):
+    service.store.receive(SMS,CALLER,'sms','Create a reminder, email its confirmation, and schedule a text.')
+    monkeypatch.setattr(service.store,'context_for',lambda phone:{'contact':{'name':'Jane Doe','source':'owner_saved_contact'},'history':[]})
+    names=['lookup_calendar','create_reminder','find_email','send_email','find_phone','schedule_text']
+    executed=[];registry=[]
+    for name in names:
+        def make_tool(name):
+            @function_tool(name=name)
+            async def action() -> dict:
+                """Perform one isolated test action and return its receipt."""
+                executed.append(name)
+                return {'ok':True,'receipt':name+'-receipt'}
+            return action
+        registry.append(make_tool(name))
+    session={'instructions':'Complete the requested actions.','delegation':{'responses':{'reasoning':{'effort':'high'}}}}
+    monkeypatch.setattr(inbound,'build_session',AsyncMock(return_value=(session,registry)))
+    requests=[]
+    async def create(**kwargs):
+        requests.append(deepcopy(kwargs));index=len(requests)-1
+        if index<len(names):
+            return SimpleNamespace(output=[SimpleNamespace(type='function_call',name=names[index],arguments='{}',call_id='call'+str(index))])
+        return SimpleNamespace(output=[],output_text='Reminder created, confirmation emailed, and text scheduled.')
+    answer=asyncio.run(service.sms_answer(service.store.get(SMS),SimpleNamespace(responses=SimpleNamespace(create=create))))
+    assert answer=='Reminder created, confirmation emailed, and text scheduled.'
+    assert executed==names
+    assert len(requests)==7 and all(r['parallel_tool_calls'] is False for r in requests)
+    outputs=[m for m in requests[-1]['input'] if isinstance(m,dict) and m.get('type')=='function_call_output']
+    assert [json_result(m)['receipt'] for m in outputs]==[name+'-receipt' for name in names]
+
+@pytest.mark.parametrize('form_status,provider_status,stream_error,expected',[
+    ('completed',None,'','completed'),
+    ('in-progress','completed','','completed'),
+    ('in-progress','in-progress','','fallback'),
+    ('completed',None,'stream failed','fallback'),
+])
+def test_voice_connect_action_distinguishes_hangup_from_stream_failure(service,monkeypatch,form_status,provider_status,stream_error,expected):
+    service.store.receive(SID,CALLER,'voice')
+    fetch=SimpleNamespace(fetch=lambda:SimpleNamespace(status=provider_status))
+    monkeypatch.setattr(service,'client',lambda:SimpleNamespace(calls=lambda sid:fetch))
+    app=FastAPI();service.install(app)
+    data={'AccountSid':ACCOUNT,'To':PHONE,'From':CALLER,'CallSid':SID,'CallStatus':form_status}
+    if stream_error:data['StreamError']=stream_error
+    headers={'X-Twilio-Signature':RequestValidator('secret').compute_signature('https://example.com/inbound/fallback',data)}
+    with TestClient(app,base_url='https://example.com') as client:
+        response=client.post('/inbound/fallback',data=data,headers=headers)
+    assert response.status_code==200 and service.store.get(SID)['status']==expected
+    assert ('could not continue' in response.text)==(expected=='fallback')
+
+def test_sms_limit_reports_receipts_with_no_more_tools(service,monkeypatch):
+    service.store.receive(SMS,CALLER,'sms','Complete a long assignment.')
+    monkeypatch.setattr(service.store,'context_for',lambda phone:{'contact':{'name':'Jane Doe','source':'owner_saved_contact'},'history':[]})
+    @function_tool()
+    async def lookup() -> dict:
+        """Read a test receipt."""
+        return {'ok':True,'receipt':'confirmed-read'}
+    session={'instructions':'Complete the assignment.','delegation':{'responses':{'reasoning':{'effort':'high'}}}}
+    monkeypatch.setattr(inbound,'build_session',AsyncMock(return_value=(session,[lookup])))
+    requests=[]
+    async def create(**kwargs):
+        requests.append(deepcopy(kwargs))
+        if kwargs['tools']:
+            return SimpleNamespace(output=[SimpleNamespace(type='function_call',name='lookup',arguments='{}',call_id='read'+str(len(requests)))])
+        assert 'anything unfinished or uncertain' in kwargs['instructions']
+        assert len([m for m in kwargs['input'] if isinstance(m,dict) and m.get('type')=='function_call_output'])==16
+        return SimpleNamespace(output=[],output_text='The lookup completed. The remaining work is unfinished.')
+    answer=asyncio.run(service.sms_answer(service.store.get(SMS),SimpleNamespace(responses=SimpleNamespace(create=create))))
+    assert answer=='The lookup completed. The remaining work is unfinished.'
+    assert len(requests)==17 and requests[-1]['tools']==[]
+
 def test_new_feed_is_optional_and_readonly(monkeypatch):
     import mcp_integration as m
     from pydantic import BaseModel
