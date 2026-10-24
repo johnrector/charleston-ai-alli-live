@@ -399,3 +399,46 @@ def test_result_expiry_starts_when_scheduled_work_finishes(monkeypatch):
     now=datetime.now(timezone.utc)
     job=dict(id='J',phone=CALLER,created_at=now-__import__('datetime').timedelta(days=12),completed_at=now)
     assert work_store.valid_token(job,'token')
+
+
+def test_dot_feed_carries_results_but_not_bearer_links_or_internal_review():
+    import assistant_bridge as bridge
+    db=Mock()
+    db.execute.return_value.fetchall.return_value=[('J','owner',False,'completed','A practical plan [PDF](sandbox:/mnt/data/private.pdf)'),('R','owner',True,'completed','PRIVATE REVIEW TEXT')]
+    events=[dict(source='cloud_work',work_id='J'),dict(source='cloud_work',work_id='R')]
+    bridge.enrich(db,events)
+    assert events[0]['requester_scope']=='owner' and 'sandbox:' not in events[0]['result_excerpt']
+    assert events[0]['result_requires_owner_sign_in'] and '?' not in events[0]['result_page']
+    assert events[1]['internal_review'] and 'result_excerpt' not in events[1]
+
+
+def test_dot_completion_is_a_report_not_a_fabricated_verified_action(monkeypatch):
+    import assistant_bridge as bridge
+    db=Mock();db.execute.return_value.fetchone.return_value=None
+    monkeypatch.setattr(bridge.store,'connection',lambda:connection(db))
+    monkeypatch.setattr(bridge.store,'initialize',lambda:None)
+    notify=Mock();monkeypatch.setattr(bridge.store,'notify',notify)
+    result=bridge.report('demo:route','Prepare route','completed','Route built',['maps-result-1'])
+    payload=notify.call_args.args[2]
+    assert payload['source']=='dot_work' and payload['status']=='reported_completed'
+    assert 'not independently verified' in payload['verification']
+    assert result['performed_external_action'] is False
+    db.execute.return_value.fetchone.return_value=(payload,)
+    assert bridge.report('demo:route','Prepare route','completed','Route built',['maps-result-1'])['duplicate']
+    with pytest.raises(ValueError,match='different receipt'):bridge.report('demo:route','Prepare route','completed','Changed',[])
+
+
+def test_suspension_cancels_future_promises_not_only_queued_sms(monkeypatch):
+    db=Mock();db.execute.return_value.fetchall.return_value=[('P',)]
+    monkeypatch.setattr(security.store,'connection',lambda:connection(db))
+    event=Mock();monkeypatch.setattr(__import__('promises'),'event',event)
+    monkeypatch.setattr(security.store,'notify',Mock())
+    security.set_block(CALLER,True)
+    assert any("UPDATE alli_promise SET state='cancelled'" in c.args[0] for c in db.execute.call_args_list)
+    event.assert_called_once_with(db,'P','cancelled','John','Contact suspended; pending promise cancelled')
+
+
+def test_birthday_schedule_preserves_eastern_time_after_daylight_saving_ends():
+    from zoneinfo import ZoneInfo
+    when=datetime(2026,11,1,9,0,tzinfo=ZoneInfo('America/New_York'))
+    assert when.astimezone(timezone.utc).hour==14

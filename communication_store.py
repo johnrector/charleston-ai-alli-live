@@ -86,7 +86,8 @@ def updates(after_id=0, limit=30):
     with connection() as db:
         rows = db.execute('SELECT id,payload,created_at FROM alli_communication_update WHERE id>%s ORDER BY id LIMIT %s', (after_id, limit)).fetchall()
         counts=db.execute('SELECT source,count(*) FROM alli_contact_name GROUP BY source').fetchall()
-    return {'updates':[dict(id=r[0], **r[1], created_at=r[2].isoformat()) for r in rows], 'next_cursor':rows[-1][0] if rows else after_id,
+        events=__import__('assistant_bridge').enrich(db,[dict(id=r[0], **r[1], created_at=r[2].isoformat()) for r in rows])
+    return {'updates':events, 'next_cursor':rows[-1][0] if rows else after_id,
             'contact_directory':{'policy':'saved-contact-v1','counts_by_source':dict(counts)},
             'google_connection':dict(CONNECTION_STATUS)}
 

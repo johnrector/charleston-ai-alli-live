@@ -144,3 +144,19 @@ def test_normalize_requires_a_real_direct_number():
     assert normalize_phone('+44 20 7946 0958')=='+442079460958'
     for number in ['no phone','911','000-000-0000','843-806-1033 ext 12']:
         with pytest.raises(ValueError):normalize_phone(number)
+
+
+def test_dot_bridge_tools_share_owner_oauth_and_have_accurate_annotations(monkeypatch):
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    import mcp_integration,mcp_auth
+    memory=MemoryStore();monkeypatch.setattr(mcp_integration,'store',memory);monkeypatch.setattr(mcp_auth,'store',memory)
+    class Input(BaseModel):pass
+    mcp=mcp_integration.install_mcp(FastAPI(),lambda x:None,Input,read_updates=lambda *a:dict(updates=[]))
+    tools={t.name:t for t in asyncio.run(mcp.list_tools())}
+    for name in ('find_people','get_work_status','record_dot_activity'):
+        assert tools[name].securitySchemes==[dict(type='oauth2',scopes=['calls:write'])]
+        assert tools[name].annotations.openWorldHint is False
+    assert tools['get_work_status'].annotations.readOnlyHint is True
+    assert tools['record_dot_activity'].annotations.readOnlyHint is False
+    assert tools['record_dot_activity'].annotations.idempotentHint is True

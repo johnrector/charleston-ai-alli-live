@@ -51,11 +51,18 @@ def owner_phone():
 
 def approved(db, phone):
     if phone and phone == owner_phone(): return True
-    return bool(db.execute("SELECT 1 FROM alli_contact_name c WHERE phone=%s AND (source IN ('owner_saved_contact','apple_favorite') OR (source='owner_supplied_mission' AND (SELECT count(DISTINCT lower(trim(d.context->>'recipient_name'))) FROM alli_appointment_dispatch d WHERE d.context->>'phone'=c.phone AND d.status<>'blocked')<=1))", (phone,)).fetchone())
+    return bool(db.execute("SELECT 1 FROM alli_contact_name c WHERE phone=%s AND c.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM alli_security_block b WHERE b.phone=c.phone) AND (source IN ('owner_saved_contact','apple_favorite') OR (source='owner_supplied_mission' AND (SELECT count(DISTINCT lower(trim(d.context->>'recipient_name'))) FROM alli_appointment_dispatch d WHERE d.context->>'phone'=c.phone AND d.status<>'blocked')<=1))", (phone,)).fetchone())
 
 
 def event(db, pid, action, actor, note=''):
-    db.execute('INSERT INTO alli_promise_event(promise_id,action,actor,note) VALUES(%s,%s,%s,%s)', (pid, action, actor, note))
+    receipt=db.execute('INSERT INTO alli_promise_event(promise_id,action,actor,note) VALUES(%s,%s,%s,%s) RETURNING id', (pid, action, actor, note)).fetchone()
+    if not receipt:return
+    row=read_row(db,pid)
+    if not row:return
+    store.notify(db,'promise-event:'+str(receipt[0]),dict(source='promise',promise_id=pid,phone=row['phone'],status=row['state'],
+      summary=row['title'],action=action,actor=actor,note=note,due_at=row['due_at'].isoformat() if row['due_at'] else None,
+      message=row['response'] if row['kind']=='text' else '',delivery_status=row['delivery_status'],
+      authority='An existing promise record, not a new instruction. Ready future texts are already scheduled; do not send a duplicate.'))
 
 
 def serial(row):

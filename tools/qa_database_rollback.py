@@ -25,12 +25,16 @@ with original() as db:
             assert not owner_access.authorized(friend,'voice',sid)
             work=jobs.create(friend,'Temporary security fixture','Temporary rollback fixture','Write a brief checklist',tag,notify=False)
             text=sms.enqueue(sms.TextMessage(request_id=tag,phone=friend,recipient_name='Temporary security fixture',message='Rollback-only fixture',send_at=__import__('datetime').datetime.now(__import__('datetime').timezone.utc)+__import__('datetime').timedelta(minutes=5)))
+            import promises
+            promise=promises.create('Future rollback-only birthday',phone=friend,contact_name='Temporary security fixture',kind='text',due_at=__import__('datetime').datetime.now(__import__('datetime').timezone.utc)+__import__('datetime').timedelta(days=8),response='Happy birthday!',dedupe=tag+'promise')
             security.set_block(friend,True,'Rollback-only QA')
+            assert promises.read_row(db,promise['promise']['id'])['state']=='cancelled'
             assert jobs.read(work['work_id'])['state']=='cancelled'
             assert sms.get(tag)['status']=='cancelled'
             assert not jobs.allowed(db,friend)
             security.set_block(friend,False)
             assert jobs.allowed(db,friend)
+            assert promises.read_row(db,promise['promise']['id'])['state']=='cancelled'
             assert jobs.read(work['work_id'])['state']=='cancelled'
             security.delete_contact(friend)
             assert store.context_for(friend)['contact'] is None
