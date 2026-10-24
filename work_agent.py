@@ -319,7 +319,8 @@ async def execute(job,call,client=None):
         if call.name in handoff.NAMES:
             try:return await handoff.execute(job,call,args,client)
             except (ValueError,RuntimeError) as exc:return dict(ok=False,error=str(exc))
-        if call.name not in {'find_connected_tools','run_connected_tool'}:raise ValueError('Use the cloud agent’s connected plugin and artifact tools')
+        if call.name not in {'find_connected_tools','run_connected_tool'}:
+            return dict(ok=False,error='That retired/unavailable tool was not executed. Use find_connected_tools and run_connected_tool for the connected native WordPress plugin, or the supplied artifact tools. Follow the mounted cloud skill adapter.')
         if call.name=='run_connected_tool' and not handoff.permitted(args.get('tool_name',''),job):raise ValueError('Article assignments have no private email/calendar/account access')
     if not handoff.enabled(job) and (job.get('context') or {}).get('public_article') and call.name not in (__import__('wordpress_publish').NAMES|__import__('article_studio').NAMES):raise ValueError('Article jobs use public research and their bound publishing/artifact tools only')
     if call.name=='find_connected_tools':
