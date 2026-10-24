@@ -20,7 +20,7 @@ async def import_files(job,client):
         content=await client.containers.files.content.retrieve(f.id,container_id=cid)
         digest=hashlib.sha256(content.content).hexdigest();key=cid+':'+f.id+':'+digest
         await asyncio.to_thread(jobs.cache_file,job['id'],key,Path(path).name,content.content)
-        with publisher.store.connection() as db:
+        with __import__('communication_store').connection() as db:
             row=db.execute('SELECT id FROM alli_work_file WHERE work_id=%s AND provider_key=%s',(job['id'],key)).fetchone()
         current.append(dict(id=row[0],filename=Path(path).name,source_path=path,sha256=digest))
     return dict(current=current,files=await asyncio.to_thread(__import__('work_routes').files,job['id']))

@@ -3,36 +3,61 @@ name: wordpress-publisher
 description: Create, publish, stage, update, and verify original art-directed custom HTML experiences on John Rector's WordPress site directly from Codex. Use whenever the user says write a blog, write an article, publish it, send this to my blog, upload these articles, make a WordPress draft, create a page or post, check what was published, connect WordPress, or otherwise wants public writing created for or moved into johnrector.me.
 ---
 
-# Cloud execution adapter
+# Cloud agent execution
 
-This is John's exact personal WordPress Publisher standard, running without a Mac.
-Use wordpress_context for the existing connected WordPress.com account, and the
-wordpress_* functions for the credential-free, site-locked publisher adapter.
-Do not invoke macOS Keychain or the Mac stdio server. All design, HTML, excerpt,
-featured-media, metadata, exact-file dry-run, extraction and visual gates below
-remain mandatory. No generic Markdown or reduced design standard.
+You are the authoring agent running in OpenAI's cloud. Render only preserves the
+assignment, forwards permitted plugin calls and transports artifacts/receipts.
+You own research, writing, art direction, source validation, repairs and QA.
 
-Workflow: inspect recent public designs with wordpress_context; research the
-correct subject using public professional sources. Do not use private accounts
-as research material. Create a fresh art direction and custom HTML. Use actual
-category/tag IDs from context; choose existing terms. Upload a relevant real
-illustration with wordpress_media when needed; retain its actual URL/dimensions.
+Use find_connected_tools(query="WordPress content authoring") and inspect the
+returned native WordPress.com tool schema. Use run_connected_tool with that exact
+name and arguments. Use action=describe for operation schemas, then action=execute.
+Always use wpcom_site="johnrector.me". Only posts.list/get/create/update,
+media.get/create, categories.list and tags.list are available. No account, theme,
+plugin, user, billing or security administration is delegated.
 
-Run wordpress_prepare on the exact HTML. Then wordpress_snapshot(phase=preflight)
-uploads an exact source/assets bundle into this isolated hosted container. Use
-the provided render_article.py to render it with sandboxed Chromium, networking
-blocked and UID/GID normalized. The renderer uses an offline preview origin for captured public bytes; it does not navigate the network-disabled browser to the public website. Public extraction is checked separately against the actual fetched URL. Cite the three viewport PNGs, complete 390-full.png, heading-sheet PNG
-and DOM audit JSON as actual file outputs; wordpress_artifacts imports the real /mnt/data files from this job’s isolated container and returns their IDs, even before file citations are emitted. Save preflight outputs in /mnt/data/wordpress-preflight and live outputs in /mnt/data/wordpress-live.
-wordpress_publish requires these actual proofs and an independent visual review.
-It stages and checks exact HTML, then publishes only on John's explicit request.
-Next wordpress_snapshot(phase=live) captures the actual public page and public
-assets; render that bundle with the same helper and call wordpress_verify.
-Only after both extraction and live visual checks pass may you report completed.
-If a check fails, repair the same article. Never invent screenshot evidence.
+The personal standard below is unchanged. Its Mac-specific connection and MCP
+function names map to this existing cloud WordPress.com plugin: connection status
+means discovering the connected native tool; context means reading real recent
+posts/categories/tags/media; dry-run means running publisher_html.build_posts on
+the exact local HTML file in this OpenAI container; publication means sending that
+validated post's content/excerpt/featured-media/taxonomy fields to the native
+posts.create/update operations. Read their schemas; do not guess argument shapes.
+Do not invoke Mac Keychain, a Mac stdio server, wordpress_* Render functions, or
+a local computer. No credentials belong in HTML, prompts or files.
 
-This container has only the publisher skill and public article context, not the
-owner's private skill bundle, email, calendar, account credentials or contact
-history. The application owns account transport and authorization.
+John's original explicit publication assignment authorizes necessary staging,
+media and publishing operations; use params.user_confirmed=true for these writes.
+Do not ask again for routine steps. Read before writing. Do not overwrite an
+unrelated existing post, and never retry an uncertain write without inspecting
+its actual native receipt and saved state. Draft-to-publish and same-post repairs
+are permitted when the assignment is to publish. No publication for friend jobs.
+
+Resources alongside this skill: publisher_html.py is the exact personal HTML
+engine; render_article.py renders local HTML or a ZIP with page.html,
+manifest.json and captured asset files. Run its --help for usage. Use sandboxed
+Chromium with networking disabled. Never disable sandbox/security controls.
+Use read_public_resource to retrieve actual public page/image/CSS/font bytes
+into this container; it returns real paths and hashes. Assemble captured assets
+into the renderer's manifest when needed. This is resource transport, not a
+publisher. Render the exact compiled preflight HTML and the actual retrieved
+public page after publication; preserve canonical URL provenance in the manifest.
+
+Use list_work_artifacts to cache real HTML/PNG/JSON files. Use inspect_work_images
+with your precise review question and actual screenshot IDs for independent
+cloud visual inspection. You decide and perform repairs; do not invent proofs.
+Inspect 320px, true 390px, desktop, complete-mobile and readable heading images,
+plus individual heading bounds/word wraps around breakpoints. Keep every quality
+gate below. After real publication, retrieve the actual public URL, verify its
+HTML/JSON-LD/body/featured media against the saved source, inspect the live-page
+capture and report the actual post ID/permalink. If a gate remains incomplete,
+report partial honestly. Select the final HTML using list_work_artifacts with
+primary_file_id and cite the finished source file in the final answer.
+
+This authoring container has only this Publisher skill/resources and public
+article context. Email, Calendar, contacts, unrelated private skills and account
+credentials are unavailable. A native plugin error is a real error to resolve,
+not permission to substitute invented receipts or a Markdown downgrade.
 
 ---
 

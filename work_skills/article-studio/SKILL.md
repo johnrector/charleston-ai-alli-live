@@ -17,4 +17,11 @@ Use the mounted `render_article.py` with the HTML path and output directory, for
 
 It captures actual 320/390/1440 screenshots, a readable heading sheet and DOM metrics at those widths plus either side of CSS breakpoints. Require no document or descendant overflow, arbitrarily split heading words, clipping or overlap. The measured viewport must really be 390 pixels, not just a resized screenshot. Inspect the readable heading proof and the desktop/mobile screenshots, and repair actual problems before finishing.
 
-Call `article_artifacts` to import generated HTML, PNG and audit files into this job and obtain real IDs. Call `article_verify` with the exact HTML source ID, five actual PNG IDs (320,390,1440,headings,390-full), and audit.json ID. The complete phone page distinguishes genuine CSS clipping from normal screenshot crop boundaries. It independently checks the source and actual images. If it fails, repair the design, rerender and reverify; do not ask the caller for routine confirmation. Return the final HTML as a file citation. Completion is allowed only after verification. The result page embeds the HTML safely, and expires seven days after completion.
+Call `list_work_artifacts` to import generated HTML, PNG and audit files into this job and obtain real IDs. Call `inspect_work_images` with image_ids containing the five actual PNG IDs (320,390,1440,headings,390-full) and a question asking for the heading/layout/accessibility review. Inspect audit.json yourself against the exact HTML source hash. The complete phone page distinguishes genuine CSS clipping from normal screenshot crop boundaries. It independently checks the source and actual images. If it fails, repair the design, rerender and reverify; do not ask the caller for routine confirmation. Return the final HTML as a file citation. Completion is allowed only after verification. The result page opens the HTML in a sandboxed reader, and expires seven days after completion.
+
+The OpenAI cloud agent owns composition and QA. Render only queues work and
+transports artifacts/results. list_work_artifacts optionally takes
+primary_file_id to select the final HTML. inspect_work_images takes question and
+image_ids, returns an independent reasoning model's actual visual review; repair
+issues and rerender before completion. No WordPress or private-account tools
+are available on this standalone delivery path.

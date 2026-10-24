@@ -237,6 +237,8 @@ def functions(job):
       schema('find_connected_tools','Discover tools permitted for this requester. Friend jobs see only public-information apps, never private accounts.',dict(query=dict(type='string')),('query',)),
       schema('run_connected_tool','Execute a permitted connected tool within the original assignment. Routine delegated steps do not require reconfirmation.',
         dict(tool_name=dict(type='string'),arguments_json=dict(type='string')),('tool_name','arguments_json'))]
+    if __import__('article_handoff').enabled(job):
+        return result+__import__('article_handoff').schemas(schema)
     if (job.get('context') or {}).get('public_article'):
         return [result[0],*(__import__('wordpress_publish').schemas(schema,job) if job.get('context',{}).get('wordpress_authoring') else __import__('article_studio').schemas(schema))]
     result+=__import__('cloud_calls').schemas(schema,job)
@@ -250,11 +252,11 @@ def functions(job):
           dict(start_datetime=dict(type='string'),end_datetime=dict(type='string')),('start_datetime','end_datetime'))]
     return result
 
-def find_tools(query,scope='owner'):
+def find_tools(query,scope='owner',job=None):
     if runtime.state!='connected':return dict(ok=False,error='Cloud account not connected. John can connect it from Tools in his dashboard.')
     terms=query.lower().split()
     import phone_tool_policy as policy
-    permitted=[t for t in runtime.tools.values() if (scope=='owner' and policy.allowed(t['name'])) or (t['name'] in PUBLIC_TOOLS and (t.get('annotations') or {}).get('readOnlyHint') is True)]
+    permitted=[t for t in runtime.tools.values() if (scope=='owner' and (policy.allowed(t['name'],job) if not job or not __import__('article_handoff').enabled(job) else __import__('article_handoff').permitted(t['name'],job))) or (t['name'] in PUBLIC_TOOLS and (t.get('annotations') or {}).get('readOnlyHint') is True)]
     choices=sorted(permitted,key=lambda t:sum(w in (t['name']+' '+t.get('description','')).lower() for w in terms),reverse=True)
     matches=[t for t in choices if any(w in (t['name']+' '+t.get('description','')).lower() for w in terms)][:8]
     return dict(ok=True,tools=[dict(name=t['name'],description=t.get('description',''),input_schema=t['inputSchema'],read_only=(t.get('annotations') or {}).get('readOnlyHint',False)) for t in matches])
@@ -312,8 +314,17 @@ async def execute(job,call,client=None):
     if call.name=='ask_for_clarification':
         if approval.get('call_id')==call.call_id and approval.get('decision')=='reply':return dict(ok=True,answer=approval['answer'],from_john=approval.get('ask_john',False))
         raise Waiting(dict(kind='clarification',call_id=call.call_id,question=jobs.clean(args['question'],1500),ask_john=bool(args.get('ask_john')),arguments=args))
-    if (job.get('context') or {}).get('public_article') and call.name not in (__import__('wordpress_publish').NAMES|__import__('article_studio').NAMES):raise ValueError('Article jobs use public research and their bound publishing/artifact tools only')
-    if call.name=='find_connected_tools':return find_tools(args.get('query',''),job['scope'])
+    handoff=__import__('article_handoff')
+    if handoff.enabled(job):
+        if call.name in handoff.NAMES:
+            try:return await handoff.execute(job,call,args,client)
+            except (ValueError,RuntimeError) as exc:return dict(ok=False,error=str(exc))
+        if call.name not in {'find_connected_tools','run_connected_tool'}:raise ValueError('Use the cloud agent’s connected plugin and artifact tools')
+        if call.name=='run_connected_tool' and not handoff.permitted(args.get('tool_name',''),job):raise ValueError('Article assignments have no private email/calendar/account access')
+    if not handoff.enabled(job) and (job.get('context') or {}).get('public_article') and call.name not in (__import__('wordpress_publish').NAMES|__import__('article_studio').NAMES):raise ValueError('Article jobs use public research and their bound publishing/artifact tools only')
+    if call.name=='find_connected_tools':
+        if handoff.enabled(job) and runtime.state in {'starting','waiting_for_previous_instance'}:await asyncio.to_thread(__import__('cloud_calls').defer,job['id'])
+        return find_tools(args.get('query',''),job['scope'],job)
     if call.name in __import__('article_studio').NAMES:
         try:return await __import__('article_studio').execute(job,call,args,client)
         except (ValueError,RuntimeError) as exc:return dict(ok=False,validation_error=str(exc),next='Repair the exact article, rerender and verify. Do not claim completion or ask for routine confirmation.')
@@ -349,13 +360,14 @@ async def execute(job,call,client=None):
     arguments=json.loads(args['arguments_json'])
     if not isinstance(arguments,dict):raise ValueError('Tool arguments must be an object')
     if job['scope']=='owner':await asyncio.to_thread(policy.validate,args['tool_name'],arguments,job)
-    if job['scope']=='owner' and args['tool_name'] in policy.WRITE:
+    native_read=handoff.read_only(args['tool_name'],arguments)
+    if job['scope']=='owner' and (args['tool_name'] in policy.WRITE or (handoff.wordpress_tool(args['tool_name']) and not native_read)):
         import security_controls as security
         await asyncio.to_thread(security.reserve,'account_write',job['phone'],job['id']+':'+call.call_id)
         if args['tool_name']=='gmail.send_email':await asyncio.to_thread(security.reserve,'email_send',job['phone'],job['id']+':'+call.call_id)
         if args['tool_name'] in ('google_calendar.create_event','google_calendar.update_event','google_calendar.delete_event'):
             await asyncio.to_thread(security.calendar_write,job['phone'],job['id']+':'+call.call_id)
-    if not (tool.get('annotations') or {}).get('readOnlyHint',False) and not accepted:
+    if not (tool.get('annotations') or {}).get('readOnlyHint',False) and not native_read and not accepted:
         authority=await delegated_authority(job,tool,arguments,client)
         if not authority['allowed']:
             raise Waiting(dict(kind='tool',call_id=call.call_id,question=authority['reason'],arguments=args))
@@ -422,8 +434,10 @@ async def execution_tools(job,api):
     if job.get('internal'):return []
     environment=dict(type='container_auto')
     if (job.get('context') or {}).get('public_article'):
-        if job['context'].get('wordpress_authoring'):__import__('wordpress_publish').owner_only(job)
-        environment=dict(type='container_reference',container_id=await __import__('wordpress_publish').container(job,api))
+        if job['context'].get('wordpress_authoring'):
+            if not __import__('article_handoff').permitted('wpcom_mcp_content_authoring',job) and __import__('article_handoff').enabled(job):raise ValueError('Owner publication authority is required')
+            if not __import__('article_handoff').enabled(job):__import__('wordpress_publish').owner_only(job)
+        environment=dict(type='container_reference',container_id=await __import__('cloud_article_container').container(job,api))
     elif job['scope']=='owner' and not (job.get('context') or {}).get('group_delegation'):
         environment['skills']=[await __import__('cloud_skills').attachment(api)]
     return [dict(type='web_search'),dict(type='shell',environment=environment),*functions(job)]
@@ -479,14 +493,14 @@ async def run_job(job,client=None):
                     followups=await asyncio.to_thread(__import__('call_followthrough').queue_assignments,job,final.get('pending_assignments',[]))
                     if followups:result+='\nSaved follow-up jobs: '+', '.join(f['work_id'] for f in followups)
                     if outcome=='completed':await asyncio.to_thread(__import__('call_followthrough').reviewed,job,followups)
-                if (job.get('context') or {}).get('wordpress_authoring') and not job['context'].get('wordpress_verified') and not job['context'].get('qa_dry_run_only'):
+                if not __import__('article_handoff').enabled(job) and (job.get('context') or {}).get('wordpress_authoring') and not job['context'].get('wordpress_verified') and not job['context'].get('qa_dry_run_only'):
                     outcome='partial'
                     url=job['context'].get('wordpress_public_url')
                     result=('The article exists at '+url+' but final publication verification is not complete. ' if url else 'WordPress publication is not verified. The prepared article files and diagnostic details are saved. ')+result
-                if (job.get('context') or {}).get('public_article') and not job['context'].get('wordpress_authoring') and not job['context'].get('article_verified'):
+                if not __import__('article_handoff').enabled(job) and (job.get('context') or {}).get('public_article') and not job['context'].get('wordpress_authoring') and not job['context'].get('article_verified'):
                     outcome='partial';result='The article’s final visual verification is incomplete. The saved files and details are available. '+result
                 artifacts=[]
-                for f in all_files[:6]:
+                for f in (files or all_files[-6:]):
                     key=f['container_id']+':'+f['file_id']
                     if not await asyncio.to_thread(jobs.cached_file,job['id'],key):
                         content=await api.containers.files.content.retrieve(f['file_id'],container_id=f['container_id'])

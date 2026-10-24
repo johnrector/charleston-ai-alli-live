@@ -24,7 +24,8 @@ google_drive.batch_update_document google_drive.batch_update_spreadsheet google_
 google_drive.export_file'''.split())
 ALLOWED=READ|WRITE
 
-def allowed(name):return name in ALLOWED
+def allowed(name,job=None):
+    return name in ALLOWED or bool(job and __import__('article_handoff').permitted(name,job))
 
 def recipients_in(text,contacts=()):
     result={e.casefold() for e in re.findall(r'[\w.+%-]+@[\w.-]+\.[A-Za-z]{2,}',text)}
@@ -36,6 +37,8 @@ def recipients_in(text,contacts=()):
     return result
 
 def validate(name,args,job):
+    if __import__('article_handoff').wordpress_tool(name):
+        __import__('article_handoff').validate(name,args,job);return
     if not allowed(name):raise ValueError('This capability is not enabled on Alli’s phone interface. Hosting, billing, security administration, public sharing and permanent deletion require a separate trusted workflow.')
     if name.startswith('gmail.') and name in {'gmail.send_email','gmail.create_draft','gmail.update_draft'}:
         source=(job.get('context') or {}).get('delegation_source') or job['instruction']

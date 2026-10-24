@@ -59,7 +59,7 @@ def test_friend_article_reader_is_sandboxed_and_expires(monkeypatch):
     monkeypatch.setattr(routes.dashboard,'authenticate',deny)
     app=FastAPI();routes.install_work(app);client=TestClient(app)
     link='/work/ARTICLE/'+jobs.result_token(job)
-    page=client.get(link);assert page.status_code==200 and '/files/HTML?view=article' in page.text and '/files/OLD?view=article' not in page.text and 'sandbox="allow-popups"' in page.text and 'allow-scripts' not in page.text
+    page=client.get(link);assert page.status_code==200 and '/files/HTML?view=article' in page.text and '/files/OLD?view=article' not in page.text and 'Open article' in page.text and '<iframe' not in page.text and 'allow-scripts' not in page.text
     inline=client.get(link+'/files/HTML?view=article')
     assert inline.status_code==200 and inline.headers['content-disposition'].startswith('inline')
     assert "default-src 'none'" in inline.headers['content-security-policy'] and 'allow-same-origin' not in inline.headers['content-security-policy']
@@ -83,7 +83,7 @@ def test_skill_upload_waits_for_real_availability_without_reupload(monkeypatch):
     from openai import NotFoundError
     missing=NotFoundError('Skill version not yet available',response=httpx.Response(404,request=httpx.Request('GET','https://api.openai.com/v1/skills/test')),body={})
     client=SimpleNamespace(skills=SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(id='skill_test',latest_version='1')),versions=SimpleNamespace(retrieve=AsyncMock(side_effect=[missing,SimpleNamespace()]))),containers=SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(id='container_test'))))
-    monkeypatch.setattr(publisher,'mark',lambda job,**values:job['context'].update(values))
+    monkeypatch.setattr(__import__('cloud_article_container'),'mark',lambda job,**values:job['context'].update(values))
     monkeypatch.setattr(publisher.asyncio,'sleep',AsyncMock())
     job=dict(id='TEST',context=dict(public_article=True,wordpress_authoring=True))
     assert asyncio.run(publisher.container(job,client))=='container_test'
