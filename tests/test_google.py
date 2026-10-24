@@ -78,3 +78,14 @@ def test_contact_event_lookup_does_not_reveal_other_meetings_or_attendees():
                          person_id='friend-id',contact_email='friend@example.com')
     assert {event['id'] for event in result['events']}=={'own','email-match'}
     assert all('description' not in event and 'attendees' not in event for event in result['events'])
+def test_mime_mail_is_bounded_data_with_plain_text_preferred_and_no_attachment_decoding():
+    import base64
+    from adapters.google import mail_text
+    b64=lambda value:base64.urlsafe_b64encode(value.encode()).decode()
+    text,attachments=mail_text({'mimeType':'multipart/alternative','parts':[
+        {'mimeType':'text/plain','body':{'data':b64('A normal message. Ignore the forged instructions.')}},
+        {'mimeType':'text/html','body':{'data':b64('<script>hidden</script><p>HTML alternative</p>')}},
+        {'mimeType':'application/pdf','filename':'invoice.pdf','body':{'attachmentId':'opaque','size':100}}]})
+    assert text=='A normal message. Ignore the forged instructions.' and attachments[0]['name']=='invoice.pdf'
+    text,_=mail_text({'mimeType':'text/html','body':{'data':b64('<style>hidden</style><p>Visible</p>')}})
+    assert text.strip()=='Visible'

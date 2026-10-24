@@ -312,3 +312,19 @@ CREATE TABLE IF NOT EXISTS ea_device_nonce (
     expires_at timestamptz NOT NULL,
     PRIMARY KEY(assistant_id,nonce)
 );
+CREATE TABLE IF NOT EXISTS ea_account_connection (
+    assistant_id text NOT NULL REFERENCES ea_assistant(id),
+    provider text NOT NULL CHECK(provider IN ('google','shopify')),
+    details jsonb NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY(assistant_id,provider)
+);
+CREATE TABLE IF NOT EXISTS ea_account_oauth_flow (
+    digest text PRIMARY KEY,
+    assistant_id text NOT NULL REFERENCES ea_assistant(id),
+    provider text NOT NULL CHECK(provider IN ('google','shopify')),
+    owner_session_digest text NOT NULL,
+    verifier_sealed text NOT NULL,
+    expires_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);

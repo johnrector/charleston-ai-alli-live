@@ -19,6 +19,7 @@ class Profile:
     email_sender: str = ''
     public_facts: str = ''
     facts_reviewed_at: str = ''
+    shop_domain: str = ''
 
     @classmethod
     def load(cls, path: str | Path):

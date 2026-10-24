@@ -41,7 +41,7 @@ def page(title,content,*,status=200):
     input,textarea{width:100%}label{display:block;margin:14px 0}button,.button{background:#285a44;color:white;cursor:pointer;padding:12px 20px;border:0;display:inline-block;text-decoration:none}
     .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:18px}.grid article{margin:0}
     .muted{color:#667166}.error{color:#a03725}pre{white-space:pre-wrap;overflow-wrap:anywhere}.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-    </style><header><strong>alli · John's private space</strong><nav><a href="/dashboard">Activity</a><a href="/dashboard/people">People</a><a href="/dashboard/work">Work</a><a href="/dashboard/promises">Promises</a></nav></header><main>'''+content+'''</main></html>'''
+    </style><header><strong>alli · John's private space</strong><nav><a href="/dashboard">Activity</a><a href="/dashboard/people">People</a><a href="/dashboard/work">Work</a><a href="/dashboard/promises">Promises</a><a href="/dashboard/connections">Connections</a></nav></header><main>'''+content+'''</main></html>'''
     return HTMLResponse(document,status_code=status,headers={
         'Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff',
         'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"})

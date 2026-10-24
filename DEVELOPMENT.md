@@ -1,5 +1,29 @@
 # Live validation checkpoint — October 24, 2026
 
+## Cloud account connection candidate
+
+The owner authorized Shopify and Gmail inbox access independent of the Mac.
+The private /dashboard/connections page starts owner/session-bound, single-use
+PKCE authorization. Google reuses the already registered /google/callback URI,
+checks signed account identity, nonce, all previous scopes plus gmail.readonly,
+and real mailbox identity before atomically replacing the encrypted refresh
+token. A denied/wrong/incomplete grant retains the previous connection.
+
+Shopify supports public HTTPS client metadata at its discovered OAuth server.
+The service publishes its own metadata, requests read_all_orders, verifies the
+configured store and an actual order read, and places the offline OAuth grant
+in OpenAI's credential vault. New unrestricted owner sessions attach that vault
+to the official Shopify MCP with a read-tool allowlist. Friends and constrained
+calling missions cannot receive the vault. Ordinary execution remains none.
+
+Cloud Gmail search/thread reads are owner-only and bounded. Raw mailbox lookup
+results reach the authorized model but are omitted from durable action/ledger
+receipts; summaries and resulting actions can still be retained. Message text
+is explicitly untrusted data. Existing Gmail sending/Calendar access remains.
+Latest full local suite: 91 passed. Native session/vault and credential shapes
+were validated against the installed official SDK. Both provider consent and
+live cloud data access still need verification; do not claim connected yet.
+
 Native GPT-Live (gpt-live-1) owns phone conversation; native managed Agents
 (gpt-6.1-sol, high) own work. Twilio transports calls/audio/SMS. The old article
 studio, TAC and application reasoning loop were removed. Do not migrate the

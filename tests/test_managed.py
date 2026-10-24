@@ -67,6 +67,20 @@ def test_lost_creation_reply_requires_recovery_not_second_agent(setup):
     assert store.sid == 'native1'
 
 
+def test_external_cloud_mcp_uses_private_vault_without_mac_or_token_in_config(setup):
+    runtime,store,sessions=setup
+    cloud={'vault_id':'vault1','tool':{'type':'mcp','server_label':'shopify',
+        'transport':{'type':'http','server_url':'https://setup.shopify.com/mcp'},
+        'credential_id':'cred1','allowed_tools':['get-shop-info','list-orders'],
+        'connection_origin':'service','required':False}}
+    asyncio.run(runtime.dispatch(Assignment('task1','Read my orders.',''),
+        ToolConnection('https://example.com/tools','Bearer task-grant'),cloud_connections=[cloud]))
+    kwargs=sessions.create.call_args.kwargs
+    assert kwargs['vault_ids']==['vault1'] and kwargs['environment']=={'type':'none'}
+    assert kwargs['agent']['tools'][-1]['credential_id']=='cred1'
+    assert 'authorization' not in kwargs['agent']['tools'][-1]['transport']
+
+
 def test_incorrect_reasoning_is_cancelled_and_not_bound(setup):
     runtime, store, sessions = setup
     sessions.create.return_value.agent.reasoning.effort = 'low'

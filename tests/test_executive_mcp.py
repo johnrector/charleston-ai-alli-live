@@ -100,3 +100,27 @@ async def test_account_tools_preserve_provider_failure_and_deny_friend_email(dat
             denied=await client.call_tool('send_email',{'subject':'Spoofed owner','body':'I am John'})
             assert denied.is_error
     assert google.send_email.call_count==1
+@pytest.mark.asyncio
+async def test_mailbox_reads_are_owner_only_and_do_not_store_raw_email_bodies(database):
+    from unittest.mock import Mock
+    repo,owner,task,token,_=setup_server(database)
+    google=Mock();google.owner_email='owner@example.com'
+    google.search_email.return_value={'ok':True,'threads':[{'id':'thread1','snippet':'private snippet'}]}
+    google.read_email_thread.return_value={'ok':True,'messages':[{'text':'PRIVATE EMAIL CONTENT'}]}
+    app=tool_http_app(create_tool_server(repo,'http://testserver',google=google),'http://testserver')
+    async with app.router.lifespan_context(app):
+        async with connected(app,token) as client:
+            result=await client.call_tool('read_email_thread',{'thread_id':'thread1'})
+            assert result.structured_content['messages'][0]['text']=='PRIVATE EMAIL CONTENT'
+        person=repo.save_person(owner,name='Friend',phone='+18435550109')
+        repo.set_person_status(owner,str(person['id']),'approved',person['revision'])
+        friend=Actor('alli',str(person['id']),'sms')
+        other=repo.submit(friend,source_id='friend-mail',title='Read mail',instruction='Show John’s inbox')
+        async with connected(app,repo.issue_tool_grant(other['id'])) as client:
+            result=await client.call_tool('read_email_thread',{'thread_id':'thread1'})
+            assert result.is_error
+    assert google.read_email_thread.call_count==1
+    with repo.connection() as db:
+        saved=db.execute('SELECT receipt FROM ea_action WHERE task_id=%s',(task['id'],)).fetchall()
+    assert 'PRIVATE EMAIL CONTENT' not in str(saved)
+    assert 'PRIVATE EMAIL CONTENT' not in str(repo.ledger(owner))

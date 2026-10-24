@@ -56,7 +56,7 @@ class ManagedRuntime:
         self.api, self.profile, self.store = api.with_options(max_retries=0), profile, store
 
     async def dispatch(self, assignment: Assignment, connection: ToolConnection,
-                       execution: Execution = Execution()):
+                       execution: Execution = Execution(), *, cloud_connections=()):
         configuration = execution.configuration()
         if not await asyncio.to_thread(self.store.execution_allowed, assignment.id, execution.kind):
             raise PermissionError('This assignment cannot use the requested execution environment')
@@ -71,8 +71,11 @@ class ManagedRuntime:
                     'reasoning': {'effort': self.profile.reasoning_effort},
                     'instructions': self.profile.charter+'\n'+work_instructions(self.profile)+'\n'+assignment.instructions,
                     'text': {'format': Outcome.format()},
-                    'tools': [{'type': 'web_search'}, connection.configuration()]},
+                    'tools': [{'type': 'web_search'}, connection.configuration(),
+                              *(item['tool'] for item in cloud_connections)]},
                 environment=configuration, input=assignment.input_text,
+                **({'vault_ids':list(dict.fromkeys(item['vault_id'] for item in cloud_connections))}
+                   if cloud_connections else {}),
                 metadata={'assistant_id': self.profile.id, 'task_id': assignment.id})
             if session.agent.model != self.profile.work_model or session.agent.reasoning.effort != self.profile.reasoning_effort:
                 await self.api.beta.agents.sessions.events.create(session.id,

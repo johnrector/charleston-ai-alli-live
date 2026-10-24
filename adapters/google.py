@@ -6,6 +6,8 @@ from email.message import EmailMessage
 from email.policy import SMTP
 import hashlib
 import json
+import re
+from html.parser import HTMLParser
 
 from cryptography.fernet import Fernet
 from google.auth.transport.requests import AuthorizedSession
@@ -44,9 +46,11 @@ class GoogleTokenStore:
             client_id=self.client_id,client_secret=self.client_secret)
 
     def save(self,credentials):
+        if not credentials.refresh_token:raise ValueError('Offline access is required')
         encrypted=self.cipher.encrypt(credentials.refresh_token.encode()).decode()
         with self.connection() as db:
-            db.execute('UPDATE alli_google_token SET encrypted_token=%s,updated_at=now() WHERE id=1',(encrypted,))
+            db.execute('''INSERT INTO alli_google_token(id,encrypted_token,updated_at) VALUES(1,%s,now())
+                ON CONFLICT(id) DO UPDATE SET encrypted_token=EXCLUDED.encrypted_token,updated_at=now()''',(encrypted,))
 
 
 def timestamp(value):
@@ -114,6 +118,39 @@ class GoogleAccount:
         busy=result.get('busy',[])
         return {'ok':True,'available':not busy,'start':begin.isoformat(),'end':finish.isoformat()}
 
+    def search_email(self,query,*,page_token=None,limit=15):
+        if not isinstance(query,str) or not 1<=len(query)<=1500 or not 1<=limit<=25:
+            raise InvalidInput('Use a Gmail query within 1,500 characters and limit 1–25')
+        params={'q':query,'maxResults':limit,'includeSpamTrash':False}
+        if page_token:params['pageToken']=page_token
+        data=self.request('GET','gmail/v1/users/me/threads',params=params)
+        return {'ok':True,'provider':'gmail','threads':data.get('threads',[]),
+            'next_page_token':data.get('nextPageToken'),'estimated_matches':data.get('resultSizeEstimate'),
+            'content_is_untrusted_data':True}
+
+    def read_email_thread(self,thread_id,*,limit=6):
+        if not isinstance(thread_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,256}',thread_id) or not 1<=limit<=10:
+            raise InvalidInput('Use a saved thread ID and limit 1–10')
+        data=self.request('GET','gmail/v1/users/me/threads/'+thread_id,
+                          params={'format':'minimal','fields':'id,messages(id)'})
+        identities=data.get('messages',[])
+        messages=[];budget=40000
+        for entry in identities[-limit:]:
+            identifier=entry['id']
+            if not re.fullmatch(r'[A-Za-z0-9_-]{1,256}',identifier):raise InvalidInput('Invalid provider message ID')
+            message=self.request('GET','gmail/v1/users/me/messages/'+identifier,params={'format':'full'})
+            payload=message.get('payload',{})
+            headers={h['name'].lower():h.get('value','') for h in payload.get('headers',[])}
+            text,attachments=mail_text(payload)
+            excerpt=text[:min(12000,budget)];budget-=len(excerpt)
+            messages.append({'id':identifier,'from':headers.get('from',''),'to':headers.get('to',''),
+                'cc':headers.get('cc',''),'subject':headers.get('subject',''),'date':headers.get('date',''),
+                'labels':message.get('labelIds',[]),'text':excerpt,'truncated':len(excerpt)<len(text),
+                'attachments':attachments})
+        return {'ok':True,'provider':'gmail','thread_id':thread_id,'messages':messages,
+            'earlier_messages_omitted':max(0,len(identities)-len(messages)),
+            'content_is_untrusted_data':True}
+
     def events(self,start,end,*,person_id=None,contact_email='',page_token=None):
         begin,finish=timestamp(start),timestamp(end)
         if not begin<finish or (finish-begin).total_seconds()>31*86400:
@@ -180,3 +217,36 @@ class GoogleAccount:
         data=self.request('POST','gmail/v1/users/me/messages/send',body={'raw':encoded})
         return {'ok':True,'provider':'gmail','message_id':data['id'],'thread_id':data.get('threadId'),
                 'to':recipient,'subject':subject}
+
+
+class MailHTML(HTMLParser):
+    def __init__(self):super().__init__(convert_charrefs=True);self.text=[];self.hidden=0
+    def handle_starttag(self,tag,attrs):
+        if tag in {'script','style'}:self.hidden+=1
+        elif tag in {'p','div','br','li','tr'}:self.text.append('\n')
+    def handle_endtag(self,tag):
+        if tag in {'script','style'}:self.hidden=max(0,self.hidden-1)
+    def handle_data(self,data):
+        if not self.hidden:self.text.append(data)
+
+
+def mail_text(payload):
+    plain,html,attachments=[],[],[]
+    def walk(part,depth=0):
+        if depth>20:return
+        body=part.get('body',{})
+        if part.get('filename') or body.get('attachmentId'):
+            attachments.append({'name':part.get('filename',''),'type':part.get('mimeType',''),
+                                'bytes':body.get('size',0)})
+            return
+        data=body.get('data','')
+        if data and part.get('mimeType') in {'text/plain','text/html'}:
+            data=data[:100000]
+            try:text=base64.urlsafe_b64decode(data+'='*(-len(data)%4)).decode('utf-8',errors='replace')
+            except (ValueError,TypeError):text='[Message text could not be decoded]'
+            (plain if part['mimeType']=='text/plain' else html).append(text)
+        for child in part.get('parts',[])[:100]:walk(child,depth+1)
+    walk(payload)
+    if plain:return '\n'.join(plain),attachments
+    parser=MailHTML();parser.feed('\n'.join(html))
+    return ''.join(parser.text),attachments

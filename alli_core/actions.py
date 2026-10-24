@@ -10,6 +10,7 @@ class Tool:
     definition: dict
     invoke: Callable[..., Awaitable[dict]]
     writes: bool = False
+    retain_result: bool = True
 
     @property
     def name(self):
@@ -61,5 +62,7 @@ class ActionGate:
         except Exception:
             result = {'ok': False, 'uncertain': tool.writes,
                       'error': 'Provider action is unconfirmed.' if tool.writes else 'Lookup failed.'}
-        await asyncio.to_thread(self.store.save_action, task_id, call_id, result)
+        saved=result if tool.retain_result else {'ok':result.get('ok'),
+            'error':result.get('error'),'lookup_data_omitted':True}
+        await asyncio.to_thread(self.store.save_action, task_id, call_id, saved)
         return result
