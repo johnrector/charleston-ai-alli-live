@@ -264,9 +264,24 @@ async def container(job,client):
         z.writestr('john-publisher/SKILL.md',(folder/'SKILL.md').read_bytes())
         z.writestr('john-publisher/render_article.py',(Path(__file__).parent/'work_skills'/'wordpress-publisher'/'render_article.py').read_bytes())
         z.writestr('john-publisher/publisher_html.py',Path(engine.__file__).read_bytes())
-    skill=await client.skills.create(files=('john-publisher.zip',buf.getvalue(),'application/zip'))
-    created=await client.containers.create(name='alli-publisher-'+job['id'],memory_limit='1g',network_policy=dict(type='disabled'),
-      skills=[dict(type='skill_reference',skill_id=skill.id,version=str(skill.latest_version))],expires_after=dict(anchor='last_active_at',minutes=20))
+    from openai import NotFoundError
+    skill_id=(job.get('context') or {}).get('wordpress_skill_id')
+    version=(job.get('context') or {}).get('wordpress_skill_version')
+    if not skill_id:
+        skill=await client.skills.create(files=('john-publisher.zip',buf.getvalue(),'application/zip'))
+        skill_id=skill.id;version=str(skill.latest_version)
+        mark(job,wordpress_skill_id=skill_id,wordpress_skill_version=version)
+    # Skill upload acknowledges storage before all authoring workers can see it.
+    # Reuse the saved version and wait; never re-upload or weaken the sandbox.
+    for attempt in range(7):
+        try:
+            await client.skills.versions.retrieve(version,skill_id=skill_id)
+            created=await client.containers.create(name='alli-publisher-'+job['id'],memory_limit='1g',network_policy=dict(type='disabled'),
+              skills=[dict(type='skill_reference',skill_id=skill_id,version=version)],expires_after=dict(anchor='last_active_at',minutes=20))
+            break
+        except NotFoundError:
+            if attempt==6:raise
+            await asyncio.sleep(min(2**attempt,8))
     mark(job,wordpress_container_id=created.id)
     return created.id
 

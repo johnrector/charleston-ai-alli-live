@@ -76,3 +76,17 @@ def test_personal_html_engine_preserves_art_and_lifts_metadata():
     assert 'data-codex-theme-canvas' in output and 'data-codex-theme-firewall' in output
     with pytest.raises(RuntimeError,match='cannot contain scripts'):engine.protect_custom_html(source+'<script>alert(1)</script>')
     with pytest.raises(RuntimeError,match='scoped CSS'):engine.protect_custom_html('<article>Generic content</article>')
+
+def test_skill_upload_waits_for_real_availability_without_reupload(monkeypatch):
+    from unittest.mock import AsyncMock
+    import httpx
+    from openai import NotFoundError
+    missing=NotFoundError('Skill version not yet available',response=httpx.Response(404,request=httpx.Request('GET','https://api.openai.com/v1/skills/test')),body={})
+    client=SimpleNamespace(skills=SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(id='skill_test',latest_version='1')),versions=SimpleNamespace(retrieve=AsyncMock(side_effect=[missing,SimpleNamespace()]))),containers=SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(id='container_test'))))
+    monkeypatch.setattr(publisher,'mark',lambda job,**values:job['context'].update(values))
+    monkeypatch.setattr(publisher.asyncio,'sleep',AsyncMock())
+    job=dict(id='TEST',context=dict(public_article=True,wordpress_authoring=True))
+    assert asyncio.run(publisher.container(job,client))=='container_test'
+    assert client.skills.create.await_count==1 and client.skills.versions.retrieve.await_count==2
+    assert client.containers.create.call_args.kwargs['network_policy']=={'type':'disabled'}
+    assert job['context']['wordpress_skill_id']=='skill_test'
