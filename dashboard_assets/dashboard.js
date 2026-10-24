@@ -27,7 +27,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden)pauseWelcom
 function showLogin(){$('workspace').hidden=true;$('login').hidden=false;state=null;csrf='';motionButton.hidden=motionPreference.matches;if(!navigator.connection?.saveData)playWelcome();}
 function item(title,detail,status){const box=node('div','','item'),top=node('div','','item-top');top.append(node('strong',title));if(status)top.append(badge(status));box.append(top);if(detail)box.append(node('p',detail));return box;}
 function empty(target,text){target.append(node('p',text,'empty'));}
-function setView(name){view=name;for(const key of ['overview','promises','people'])$(key+'-view').hidden=key!==name;document.querySelectorAll('[data-view]').forEach(e=>e.classList.toggle('active',e.dataset.view===name));$('view-title').textContent={overview:'A clear head starts here.',promises:'Every promise has a place.',people:'Your people, remembered.'}[name];}
+function setView(name){view=name;for(const key of ['overview','promises','people','work','tools'])$(key+'-view').hidden=key!==name;document.querySelectorAll('[data-view]').forEach(e=>e.classList.toggle('active',e.dataset.view===name));$('view-title').textContent={overview:'A clear head starts here.',promises:'Every promise has a place.',people:'Your people, remembered.',work:'Consider it in motion.',tools:'A capable pair of hands.'}[name];if(name==='work'||name==='tools')loadAlliWork();}
 async function refresh(){const data=await api('data');state=data;$('status').textContent='';$('login').hidden=true;pauseWelcome();$('workspace').hidden=false;render();}
 function render(){if(!state)return;const open=state.promises.filter(p=>openStates.includes(p.state));const needs=open.filter(p=>p.state==='needs_john'||p.state==='blocked');const count=needs.length+state.approvals.length+state.attention.length;
  $('today-label').textContent=new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',weekday:'long',month:'long',day:'numeric'}).format(new Date()).toUpperCase()+' / EASTERN';
@@ -46,7 +46,7 @@ function render(){if(!state)return;const open=state.promises.filter(p=>openState
  const activity=$('activity-list');activity.replaceChildren();for(const a of state.activity.slice(0,10)){const p=a.payload;activity.append(item(p.summary||p.action||'Communication update',(p.phone||p.channel||'Alli')+' · '+date(a.created_at),p.status));}
  if(!state.activity.length)empty(activity,'Completed work and communication updates will appear here.');
  $('last-checked').textContent='Checked '+date(state.checked_at);
- renderPromises();renderPeople();
+ renderPromises();renderPeople();if(view==='work'||view==='tools')loadAlliWork();
 }
 function promiseCard(p,compact=false){const el=node('article','',compact?'item':'promise-card'),top=node('div','','card-top');top.append(node('span',p.contact_name||'FOR JOHN','eyebrow'),badge(p.state));el.append(top,node('h3',p.title));if(p.details)el.append(node('p',p.details));if(p.response)el.append(node('p','Approved text: '+p.response));if(p.completion_note)el.append(node('p',p.completion_note,'muted'));el.append(node('p',date(p.due_at)+' · '+p.id,'small'));const actions=node('div','','item-actions');
  if(p.kind==='ask_john'&&['needs_john','blocked'].includes(p.state)&&!p.outbound_id)actions.append(button('Answer & send',()=>editAction(p,'answer')));

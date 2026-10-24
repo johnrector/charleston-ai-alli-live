@@ -189,6 +189,11 @@ class ScheduledSMS:
         if not row: return False
         try:
             context = row.get('context') or {}
+            if context.get('kind') == 'cloud_work':
+                from work_store import revalidate
+                if not await asyncio.to_thread(revalidate,context,row['phone']):
+                    await asyncio.to_thread(receipt,row['request_id'],status='cancelled',error_code='work_changed')
+                    return True
             if context.get('kind') == 'promise':
                 from promises import revalidate
                 if not await asyncio.to_thread(revalidate,context,row['phone']):

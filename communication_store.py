@@ -42,6 +42,10 @@ def initialize():
             initialize_promises(db)
             from dashboard import initialize as initialize_dashboard
             initialize_dashboard(db)
+            from work_store import initialize as initialize_work
+            initialize_work(db)
+            from cloud_runtime import initialize as initialize_runtime
+            initialize_runtime(db)
             # Preserve owner-supplied contacts independently of mission expiry. Shared
             # numbers with conflicting names are deliberately not auto-approved.
             db.execute(r"""INSERT INTO alli_contact_name(phone,name,source,email)

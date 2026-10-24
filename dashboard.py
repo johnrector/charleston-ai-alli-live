@@ -169,7 +169,7 @@ def install_dashboard(app,communications,reminders,worker):
     async def page(): return FileResponse(STATIC/'index.html')
     @app.get('/dashboard/assets/{filename}',include_in_schema=False)
     async def assets(filename:str):
-        if filename not in ('dashboard.js','dashboard.css','alli-portrait.png','alli-welcome.mp4'): raise HTTPException(404)
+        if filename not in ('dashboard.js','dashboard.css','alli-portrait.png','alli-welcome.mp4','work.js'): raise HTTPException(404)
         return FileResponse(STATIC/filename)
     @app.post('/dashboard/api/login')
     async def login():

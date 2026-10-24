@@ -57,7 +57,7 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
     if contact_assistance:
         body=OutboundCall(request_id='inbound-'+sid,phone=store.normalize_phone(phone),
             recipient_name=contact['name'] or 'Unnamed favorite',email=contact.get('email',''),
-            mission='Help this saved contact arrange their own appointments with John and leave messages or reminders.',
+            mission='Help this saved contact arrange their own appointments with John, communicate with him, and delegate useful work within their permissions.',
             capabilities=['check_calendar','manage_calendar','create_meeting'],
             approved_logistics='Arranged by Alli at this contact’s request via Alli.')
         # Mutable only for an initially unnamed, already-approved favorite's
@@ -102,6 +102,10 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
             contact_actions.recipient_name=' '.join(name.strip().split())
         return {'ok':saved,'greeting_only':True}
     registry=[confirm_identity,remember_contact_name,report_call_outcome]
+    if contact_assistance or owner:
+        from work_agent import phone_tools,owner_call_tools
+        registry.extend(phone_tools(store.normalize_phone(phone),recognized or ('John Rector' if owner else 'Saved contact'),sid,owner_sms=owner_sms))
+        if owner_sms:registry.extend(owner_call_tools(store.normalize_phone(phone),sid))
     if contact_assistance:registry.append(meeting_time_tool())
     if contact_assistance or owner:
         from promises import tools as promise_tools
@@ -154,6 +158,10 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
     from call_actions import ACTION_INSTRUCTIONS
     owner_voice_rules="You are Alli speaking with John on his configured number. Use the OPENING. Do not ask him to confirm his name or continue an old mission. Save messages and requests using report_call_outcome. Only tools listed here are available; if he asks for an unavailable action such as placing a call, say so and save the request without implying a handoff or promising execution."
     rules=OWNER_SMS_RULES if owner_sms else CONTACT_RULES if contact_assistance else owner_voice_rules if owner else RULES
+    if contact_assistance or owner:
+        from work_agent import PHONE_RULES
+        rules+='\n'+PHONE_RULES
+        if owner_sms:rules+='\nJohn may explicitly delegate a phone call: resolve the verified recipient, use call_person, and report its actual request_id/state. You can start requested calls. General multi-step tasks can use start_cloud_work and connected cloud account tools.'
     from promises import RULES as PROMISE_RULES
     rules += '\n'+PROMISE_RULES if contact_assistance or owner else ''
     if owner_sms:rules += '\nJohn may ask what needs his attention: use list_open_promises. When he supplies an answer to a saved question, use answer_promise for the correct ID, only at his explicit request. The bound recipient cannot be changed. Say queued until the send receipt is verified.'
@@ -166,6 +174,8 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
         'standing_contact_assistance':contact_assistance,
         'recent_history':{'history':context.get('history',[])} if verified['value'] else None,
         'recent_sms_turns':[{'user':h.get('body'),'assistant':h.get('reply')} for h in context.get('history',[]) if h.get('channel')=='sms'][-6:] if channel=='sms' else []})
+    if contact_assistance or owner:
+        session['delegation']['responses']['tools'].append({'type':'web_search'})
     return session,registry
 
 class BoundSocket(FastAPIWebSocketAdapter):
@@ -228,12 +238,22 @@ class InboundCommunications:
                 response=await api.responses.create(model=self.base['delegation']['responses']['model'],
                     reasoning=session['delegation']['responses']['reasoning'],
                     instructions=session['instructions']+' SMS: reply in plain text, preferably under 600 characters. No markdown.',
-                    input=messages,tools=[dict(t.to_realtime_format(),strict=False) for t in registry],
+                    input=messages,tools=[dict(t.to_realtime_format(),strict=False) for t in registry]+([{'type':'web_search'}] if any(t.name=='start_cloud_work' for t in registry) else []),
                     parallel_tool_calls=False,max_output_tokens=8192,store=False)
                 calls=[x for x in response.output if x.type=='function_call']
                 if not calls:
                     answer=response.output_text.strip()
                     if not answer:raise ValueError('Empty SMS response')
+                    sources=[]
+                    for item in response.output:
+                        for part in getattr(item,'content',[]) or []:
+                            for note in getattr(part,'annotations',[]) or []:
+                                if getattr(note,'type','')=='url_citation' and note.url not in sources:
+                                    sources.append(note.url)
+                    if sources:
+                        answer=re.sub(r'cite[^]+','',answer)[:1100]
+                        for url in sources[:3]:
+                            if url.startswith(('https://','http://')) and len(answer)+len(url)+1<=1500:answer+='\n'+url
                     return answer[:1500]
                 messages.extend(response.output)
                 for call in calls:

@@ -99,6 +99,9 @@ async def health():
             "contact_policy": "saved-contact-v1",
             "contact_approval_api": "owner-sms-v1",
             "dashboard_api": "owner-dashboard-v1",
+            "cloud_work_api": "phone-work-v1",
+            "cloud_work_worker_ready": cloud_work.ready,
+            "cloud_tools_connected": cloud_runtime.state == 'connected',
             "promises_worker_ready": promise_worker.ready,
             "outbound_sms_api": "scheduled-sms-v1",
             "outbound_sms_worker_ready": scheduled_sms.ready,
@@ -168,6 +171,14 @@ from outbound_profiles import OutboundCall
 from appointment_voice import OutboundVoice
 outbound_voice = OutboundVoice(tac, SESSION_CONFIG, read_provider=True)
 outbound_voice.install(app, OutboundCall)
+from work_agent import WorkWorker
+import work_agent
+from cloud_runtime import runtime as cloud_runtime
+work_agent.call_executor = outbound_voice
+cloud_work = WorkWorker()
+cloud_work.install(app)
+from work_routes import install_work
+install_work(app)
 async def capture_conversation_end(session):
     try:
         await outbound_voice.conversation_ended(session)

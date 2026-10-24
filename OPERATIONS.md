@@ -330,3 +330,38 @@ Rollback: revert this release and deploy. All schema additions are additive and
 compatible with the prior application. Reverting removes dashboard/promise
 processing; durable ledger rows remain for a later fixed release. Stop/inspect any
 already queued SMS separately: a deploy rollback cannot unsend a message.
+
+## October 24 cloud-work release
+
+New modules: work_store.py (durable queue, artifacts, receipts), work_agent.py
+(Responses background worker and phone-bound tools), cloud_runtime.py (pinned
+Codex app gateway), cloud_skills.py (private skill snapshots), work_routes.py
+(owner controls and expiring result links). Schema changes are additive. Prior
+phone, calendar, messages, approvals, promises, Google grants and scheduled work
+remain compatible with the previous build.
+
+- Health exposes cloud_work_worker_ready and cloud_tools_connected independently.
+- Complete the one-time cloud device authorization from Tools & skills; this is
+  not a Mac relay. Credentials are encrypted with the existing token key. Preserve
+  that key and the database. No account tokens belong in Git, logs or chat.
+- Import the prepared private john-skills ZIP after owner authentication. The
+  manifest and all resource paths are validated before mounting hosted skills.
+- Work defaults: three active jobs and ten new jobs per contact per 24 hours,
+  100 globally. ALLI_WORK_ACTIVE_PER_CONTACT, ALLI_WORK_DAILY_PER_CONTACT and
+  ALLI_WORK_DAILY_TOTAL configure those limits. One background work executor.
+- File limits: 8 MB per file, 16 MB per job, 300 MB artifact budget; private
+  download links expire after 14 days. Expired blobs are purged during work.
+- Worker interruption with a saved provider response ID resumes by that ID;
+  no saved provider receipt means blocked, never blind replay. Account execution
+  is journaled before dispatch. Result texts use the existing outbox receipts.
+- Routine steps within an explicit delegation need no additional approval.
+  Ending a phone conversation never cancels its queued work.
+- Friends cannot acquire owner account powers by claiming a name or by adding
+  phone/role arguments. Their work and preferences are bound to signed sender
+  identity and approved-directory status. Private-account work belongs to owner
+  jobs; a required John decision is surfaced in the dashboard.
+- A downloaded skill may rely on Mac-only software or a disconnected tool;
+  imported does not mean every dependency is runnable. The executor must use
+  real declared tools and cloud equivalents, never invent completion.
+- Rollback: redeploy 844c61590c7476c1d9c80ee3162f8b0317a894d1. New tables can
+  remain. A rollback does not undo completed work, sends, or account actions.

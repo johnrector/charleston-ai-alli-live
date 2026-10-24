@@ -365,3 +365,39 @@ contextual drafts and delegated call actions. Keep the existing GPT-Live voice
 layer. Current official model guidance and live project probes were checked
 before selecting this combination. Further upgrades still follow the policy at
 the top of this file; do not silently fall back to an older low-reasoning model.
+
+## Cloud work by call or text — October 24, 2026
+
+Approved contacts can delegate research, writing, analysis and real artifacts
+using `start_cloud_work`, check `get_my_work`, supply missing information with
+`continue_cloud_work`, and cancel unfinished work. Work persists in Postgres;
+ending a call or putting the phone down does not stop it. The hosted executor
+uses GPT-6.1 Sol with high reasoning, current web search and hosted shell skills.
+It retrieves actual files into durable storage, returns a private 14-day result
+link by the existing SMS outbox, and tracks result-message delivery separately.
+Generated, partial, blocked, queued, sent and delivered are distinct states.
+
+John's signed owner SMS also has verified-directory lookup, explicit requested
+outbound calls and call-result lookup. Calls retain the existing durable
+recipient/idempotency safeguards. This does not enable unsolicited appointment
+calls or let friends call third parties through John's account.
+
+The cloud app gateway runs pinned official Codex 0.164.0 over private stdio on
+Render. It uses a separate owner-authorized ChatGPT device login, an isolated
+profile, encrypted credential storage, and a cross-instance token-rotation lock.
+It runs no Codex model turns and exposes no network app-server port. Connected
+app tools are discovered from the authenticated account. Mac-only MCP servers
+and native application sessions are not inherited or relayed through the Mac.
+
+Owner work may use connected account tools. An independent high-reasoning
+check allows routine actions already authorized by the original assignment
+without asking again. It pauses for genuinely missing authority or a required
+provider consent step. Exact-action receipts precede account execution, and
+uncertain actions are never replayed. Friend work has a hard server-side
+boundary excluding John's account tools; requests needing his private data or
+decisions ask him, while independent research and file work proceed normally.
+
+The private dashboard now includes Work and Tools & skills. The private skills
+snapshot imports enabled workflows and resources, not passwords or desktop
+sessions. Availability of instructions does not make a missing tool usable.
+Use a genuine cloud equivalent or report the missing dependency honestly.
