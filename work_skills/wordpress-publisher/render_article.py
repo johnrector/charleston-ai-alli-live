@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Read-only renderer for a server-captured public article bundle; no egress."""
-import hashlib,io,json,os,re,sys,tempfile,zipfile
+import hashlib,html,io,json,os,re,sys,tempfile,zipfile
 from pathlib import Path,PurePosixPath
 from urllib.parse import urldefrag,urlsplit,urlunsplit
 
@@ -27,8 +27,14 @@ for b in re.findall(r'(?:max|min)-width\s*:\s*(\d+)px',source):
 if len(widths)>19:raise ValueError('Too many breakpoints; inspect the design before rendering')
 original=urlsplit(manifest['url'])
 preview_url=urlunsplit(('https','article.alli.invalid',original.path or '/',original.query,''))
-audit=dict(source_hash=manifest['source_hash'],phase=manifest['phase'],url=manifest['url'],render_url=preview_url,
+audit=dict(source_hash=manifest['source_hash'],phase=manifest['phase'],url=manifest['url'],render_url='about:blank',
            rendering='Offline captured HTML and asset bytes; no public-site browser navigation',viewports=[])
+base='<base href="'+html.escape(manifest['url'],quote=True)+'">'
+if re.search(r'<head\b[^>]*>',source,re.I):
+    render_source=re.sub(r'(<head\b[^>]*>)',lambda m:m.group(1)+base,source,count=1,flags=re.I)
+elif re.match(r'\s*<!doctype\b[^>]*>',source,re.I):
+    render_source=re.sub(r'(<!doctype\b[^>]*>)',lambda m:m.group(1)+'<head>'+base+'</head>',source,count=1,flags=re.I)
+else:render_source=base+source
 assets=manifest.get('assets',{})
 with sync_playwright() as p:
     browser=p.chromium.launch(executable_path=str(wrapper),headless=True,chromium_sandbox=True)
@@ -45,7 +51,10 @@ with sync_playwright() as p:
     page=context.new_page();panels=[]
     for width in sorted(widths):
         page.set_viewport_size(dict(width=width,height=900 if width>=1100 else 844))
-        page.goto(preview_url,wait_until='load');page.evaluate('document.fonts.ready')
+        # Load already-captured bytes as a local document. Network-disabled
+        # containers can prohibit even synthetic URL navigation; no navigation
+        # is necessary for inspecting this exact offline HTML and asset bundle.
+        page.set_content(render_source,wait_until='load');page.evaluate('document.fonts.ready')
         metrics=page.evaluate('''() => {
           const root=document.querySelector('.codex-html-experience')?.shadowRoot||document;
           const headings=[...root.querySelectorAll('h1,h2,h3,h4,h5,h6')].filter(e=>e.getBoundingClientRect().height>0);

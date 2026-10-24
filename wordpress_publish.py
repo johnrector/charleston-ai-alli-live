@@ -335,7 +335,7 @@ async def snapshot(job,phase,client):
     if phase=='live':
         if url!=(job.get('context') or {}).get('wordpress_public_url'):raise ValueError('Use the actual published permalink')
         page=await extraction(job,prepared)
-    else:page='<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body class="single-post">'+prepared['post']['content']+'</body></html>'
+    else:page='<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body class="single-post">'+prepared['post']['content']+'</body></html>'
     allowed={SITE,'johnrector.files.wordpress.com','fonts.googleapis.com','fonts.gstatic.com','s0.wp.com','s1.wp.com','s2.wp.com','i0.wp.com','i1.wp.com','i2.wp.com'}
     pending=[]
     def add(value,base):
