@@ -50,15 +50,16 @@ def test_friend_article_reader_is_sandboxed_and_expires(monkeypatch):
     import work_store as jobs
     monkeypatch.setenv('DEMO_KEY','test-only-artifact-secret')
     monkeypatch.setattr(__import__('security_controls'),'blocked',lambda _:False)
-    job=dict(id='ARTICLE',phone='+18435550100',scope='friend',state='completed',private_result=False,created_at=(datetime.now(timezone.utc)-timedelta(days=12)).isoformat(),completed_at=datetime.now(timezone.utc).isoformat(),title='Designed article',result='Your finished article',sources=[])
+    job=dict(id='ARTICLE',phone='+18435550100',scope='friend',state='completed',private_result=False,created_at=(datetime.now(timezone.utc)-timedelta(days=12)).isoformat(),completed_at=datetime.now(timezone.utc).isoformat(),title='Designed article',result='Your finished article',sources=[],context=dict(article_source_id='HTML'))
     artifact=dict(id='HTML',filename='article.html',content_type='text/html',content=b'<style>.art{color:navy}</style><article class="art"><h1>Art direction</h1></article>')
     monkeypatch.setattr(jobs,'read',lambda *a,**kw:job)
-    monkeypatch.setattr(routes,'files',lambda *a,**kw:[artifact])
+    old=dict(artifact,id='OLD',filename='old-version.html')
+    monkeypatch.setattr(routes,'files',lambda *a,**kw:[old,artifact])
     def deny(_):raise HTTPException(401,'Sign in')
     monkeypatch.setattr(routes.dashboard,'authenticate',deny)
     app=FastAPI();routes.install_work(app);client=TestClient(app)
     link='/work/ARTICLE/'+jobs.result_token(job)
-    page=client.get(link);assert page.status_code==200 and 'sandbox="allow-popups"' in page.text and 'allow-scripts' not in page.text
+    page=client.get(link);assert page.status_code==200 and '/files/HTML?view=article' in page.text and '/files/OLD?view=article' not in page.text and 'sandbox="allow-popups"' in page.text and 'allow-scripts' not in page.text
     inline=client.get(link+'/files/HTML?view=article')
     assert inline.status_code==200 and inline.headers['content-disposition'].startswith('inline')
     assert "default-src 'none'" in inline.headers['content-security-policy'] and 'allow-same-origin' not in inline.headers['content-security-policy']

@@ -182,7 +182,7 @@ def test_result_page_escapes_requester_content_and_exposes_only_bound_files(monk
     monkeypatch.setenv('DEMO_KEY','test-secret')
     job={'id':'ABC','phone':FRIEND,'state':'completed','created_at':datetime.now(timezone.utc).isoformat(),
          'scope':'friend','title':'<script>bad()</script>','result':'<img src=x onerror=bad()> https://example.com/a','sources':[]}
-    monkeypatch.setattr(jobs,'read',lambda wid:job)
+    monkeypatch.setattr(jobs,'read',lambda wid,**kwargs:job)
     monkeypatch.setattr(routes,'files',lambda wid,content=False:[{'id':'FILE','filename':'result.pdf','content_type':'application/pdf','content':b'%PDF'}])
     app=FastAPI();routes.install_work(app);client=TestClient(app)
     token=jobs.result_token(job)
