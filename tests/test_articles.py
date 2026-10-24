@@ -102,3 +102,36 @@ def test_visual_failure_can_be_repaired_but_uncertain_publication_stops(monkeypa
     assert result['ok'] is False and 'Heading clipped' in result['validation_error']
     monkeypatch.setattr(publisher,'execute',AsyncMock(side_effect=ValueError('An earlier WordPress write is uncertain')))
     with pytest.raises(ValueError,match='uncertain'):asyncio.run(work_agent.execute(job,call))
+
+@pytest.mark.parametrize('fail_upload',[False,True])
+def test_visual_review_streams_image_files_and_cleans_up(monkeypatch,fail_upload):
+    import json,struct,contextlib
+    from unittest.mock import AsyncMock,Mock
+    import security_controls
+    audit=dict(source_hash='exact',phase='article',viewports=[dict(width=w,overflow_px=0,split_words=0,clipped_headings=0,overlapping_headings=0) for w in (320,390,1440)])
+    def png(name,w,h):return dict(filename=name,content=b'\x89PNG\r\n\x1a\n'+b'\0'*8+struct.pack('>II',w,h)+b'opaque-test-pixels')
+    files={'audit':dict(content=json.dumps(audit).encode()),'phone320':png('320.png',320,844),'phone390':png('390.png',390,844),'desktop':png('1440.png',1440,900),'headings':png('headings.png',820,1000),'full':png('390-full.png',390,2200)}
+    monkeypatch.setattr(publisher,'artifact',lambda job,fid:files[fid])
+    monkeypatch.setattr(publisher.store,'connection',lambda:contextlib.nullcontext(Mock()))
+    monkeypatch.setattr(security_controls,'model',lambda *a:None)
+    monkeypatch.setattr(security_controls,'settle_model',lambda *a:None)
+    created=[SimpleNamespace(id='image'+str(i)) for i in range(5)]
+    if fail_upload:created=[created[0],RuntimeError('Upload failed')]
+    client=SimpleNamespace(files=SimpleNamespace(create=AsyncMock(side_effect=created),delete=AsyncMock()),responses=SimpleNamespace(create=AsyncMock(return_value=SimpleNamespace(output_text='{"passed":true,"issues":[]}',usage=None))))
+    args=(dict(id='TEST',phone='owner'),dict(source_hash='exact',post=dict(title='A designed article')),['phone320','phone390','desktop','headings','full'],'audit',client)
+    if fail_upload:
+        with pytest.raises(RuntimeError,match='Upload failed'):asyncio.run(publisher.visual(*args,phase='article'))
+        assert client.files.delete.await_count==1 and not client.responses.create.called
+    else:
+        asyncio.run(publisher.visual(*args,phase='article'))
+        content=client.responses.create.call_args.kwargs['input'][0]['content']
+        images=[v for v in content if v['type']=='input_image']
+        assert len(images)==5 and all('file_id' in v and 'image_url' not in v and '_artifact_id' not in v for v in images)
+        assert client.files.delete.await_count==5
+
+@pytest.mark.parametrize('memory,expected',[(536870912,1),(2147483648,2)])
+def test_default_work_parallelism_respects_memory(monkeypatch,memory,expected):
+    from pathlib import Path
+    monkeypatch.delenv('ALLI_WORK_CONCURRENCY',raising=False)
+    monkeypatch.setattr(Path,'read_text',lambda _:str(memory))
+    assert work_agent.work_parallelism()==expected

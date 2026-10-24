@@ -3,7 +3,7 @@
 Account transport uses the existing connected WordPress.com plugin. No Keychain
 credentials enter Render, the model, or hosted authoring containers.
 """
-import asyncio,base64,hashlib,json,re,struct,tempfile
+import asyncio,base64,contextlib,hashlib,json,re,struct,tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 import httpx
@@ -161,14 +161,29 @@ async def _visual(job,prepared,ids,audit_id,client,*,phase):
         if f['filename']=='390-full.png' and w==390 and h>=844:full_page=True
         if w<300 or h<200 or len(f['content'])>8*1024*1024:raise ValueError('Use readable article screenshots')
         content.append(dict(type='input_text',text='Actual file: '+f['filename']+'; pixels '+str(w)+' × '+str(h)))
-        content.append(dict(type='input_image',image_url='data:image/png;base64,'+base64.b64encode(f['content']).decode(),detail='high'))
+        content.append(dict(type='input_image',_artifact_id=fid,detail='high'))
     if not {320,390}.issubset(set(actual_widths)) or not any(w>=1100 for w in actual_widths):raise ValueError('Screenshot pixels must match true phone and desktop widths')
     if not full_page:raise ValueError('Import and include the actual complete 390-full.png page so natural screenshot edges are not mistaken for CSS clipping')
     import security_controls as security
     from reasoning_config import MODEL,REASONING
     ref='wordpress-visual:'+job['id']+':'+phase+':'+prepared['source_hash']
     await asyncio.to_thread(security.model,job['phone'],ref,6000)
-    r=await client.responses.create(model=MODEL,reasoning=dict(REASONING),store=False,max_output_tokens=6000,input=[dict(role='user',content=content)],text=dict(format=dict(type='json_schema',name='article_visual_review',strict=True,schema=dict(type='object',properties=dict(passed=dict(type='boolean'),issues=dict(type='array',items=dict(type='string'))),required=['passed','issues'],additionalProperties=False))))
+    del f
+    uploaded=[]
+    try:
+        # Upload one image at a time: five base64 strings plus their serialized
+        # request copies can exhaust a small web service's memory.
+        for item in content:
+            fid=item.pop('_artifact_id',None)
+            if not fid:continue
+            image=artifact(job,fid)
+            file=await client.files.create(purpose='vision',file=(image['filename'],image['content'],'image/png'))
+            uploaded.append(file.id);item['file_id']=file.id
+            del image
+        r=await client.responses.create(model=MODEL,reasoning=dict(REASONING),store=False,max_output_tokens=6000,input=[dict(role='user',content=content)],text=dict(format=dict(type='json_schema',name='article_visual_review',strict=True,schema=dict(type='object',properties=dict(passed=dict(type='boolean'),issues=dict(type='array',items=dict(type='string'))),required=['passed','issues'],additionalProperties=False))))
+    finally:
+        for fid in uploaded:
+            with contextlib.suppress(Exception):await client.files.delete(fid)
     await asyncio.to_thread(security.settle_model,ref,getattr(r.usage,'output_tokens',None) if r.usage else None)
     review=json.loads(r.output_text)
     if review.get('passed') is not True:raise ValueError('Visual QA failed: '+'; '.join(review.get('issues',[])))

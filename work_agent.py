@@ -529,6 +529,12 @@ def notify_waiting(job,approval,state):
     rid='work-question:'+job['id']+':'+hashlib.sha256(approval['call_id'].encode()).hexdigest()[:12]
     sms.enqueue(sms.TextMessage(request_id=rid,phone=target,recipient_name='John Rector' if state=='needs_john' else job['contact_name'],message=text[:1500]))
 
+def work_parallelism():
+    from pathlib import Path
+    try:default=1 if int(Path('/sys/fs/cgroup/memory.max').read_text().strip())<1024**3 else 2
+    except (OSError,ValueError):default=2
+    return max(1,min(4,int(os.getenv('ALLI_WORK_CONCURRENCY',str(default)))))
+
 class WorkWorker:
     def __init__(self):self.ready=False;self.task=None;self.runtime_task=None
     async def process_one(self):
@@ -571,7 +577,7 @@ class WorkWorker:
         @asynccontextmanager
         async def lifespan(app):
             await asyncio.to_thread(store.initialize)
-            self.ready=True;self.task=asyncio.create_task(self.run());self.other_tasks=[asyncio.create_task(self.run()) for _ in range(2)];self.runtime_task=asyncio.create_task(runtime.start())
+            self.ready=True;self.task=asyncio.create_task(self.run());self.other_tasks=[asyncio.create_task(self.run()) for _ in range(work_parallelism()-1)];self.runtime_task=asyncio.create_task(runtime.start())
             try:
                 async with original(app):yield
             finally:
