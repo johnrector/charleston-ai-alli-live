@@ -42,6 +42,10 @@ def details():
 
 def link_text(text):
     # Text is data, not HTML. Only link actual HTTP(S) URL spans.
+    # Files have verified download buttons; hosted-container paths are private
+    # implementation details and do not work in the recipient's browser.
+    text=re.sub(r'\[([^\]]+)\]\(sandbox:/[^)]+\)',r'\1',text)
+    text=re.sub(r'[^]*','',text)
     result=[];last=0
     for match in re.finditer(r'https?://[^\s<>\]\)"\']+',text):
         result.append(html.escape(text[last:match.start()]))

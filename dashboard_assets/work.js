@@ -28,7 +28,7 @@ function renderAlliWork(){
  if(!workData.work.length)empty(target,'No delegated work yet. Friends can call or text Alli with something to research, write or create.');
  const r=workData.runtime;
  $('runtime-status').textContent=r.connected?'Connected · '+r.tool_count+' account tools available in the cloud.':r.error||r.status;
- $('connect-cloud').hidden=r.connected;$('refresh-cloud').disabled=!r.connected;
+ $('connect-cloud').hidden=r.connected;$('refresh-cloud').disabled=['starting','waiting_for_previous_instance'].includes(r.status);
  const apps=$('cloud-apps');apps.replaceChildren();
  for(const a of r.apps){const row=node('div','','cloud-app');row.append(node('strong',a.runtimeName||a.id),badge(a.enabled&&a.callable?'Connected':'Unavailable'));apps.append(row);}
  $('cloud-login').hidden=!r.login;

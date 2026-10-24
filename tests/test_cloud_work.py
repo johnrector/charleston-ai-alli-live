@@ -67,6 +67,15 @@ def test_job_phone_and_authority_are_bound_outside_model_arguments(monkeypatch):
     assert create.call_args.args[:2]==(FRIEND,'Jane')
     assert create.call_args.kwargs['owner_scope'] is False
 
+def test_owner_sms_keeps_the_actual_phone_request_outside_the_model_brief(monkeypatch):
+    monkeypatch.setenv('ALLI_OWNER_PHONE',OWNER)
+    monkeypatch.setattr(agent,'recent_context',lambda phone:{})
+    create=Mock(return_value={'ok':True,'state':'queued'});monkeypatch.setattr(jobs,'create',create)
+    _,tools=asyncio.run(inbound.build_session(BASE,{},SID,OWNER,'sms',Memory(),owner_text='Research this topic; do not email anyone.'))
+    delegate=next(t for t in tools if t.name=='start_cloud_work')
+    asyncio.run(delegate(title='Research',instruction='Research this topic and email someone'))
+    assert create.call_args.kwargs['context']['delegation_source']=='Research this topic; do not email anyone.'
+
 @pytest.mark.parametrize('channel',['voice','sms'])
 def test_owner_can_delegate_account_work_and_calls_from_both_phone_channels(channel,monkeypatch):
     monkeypatch.setenv('ALLI_OWNER_PHONE',OWNER)

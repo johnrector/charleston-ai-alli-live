@@ -104,7 +104,7 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
     registry=[confirm_identity,remember_contact_name,report_call_outcome]
     if contact_assistance or owner:
         from work_agent import phone_tools,owner_call_tools
-        registry.extend(phone_tools(store.normalize_phone(phone),recognized or ('John Rector' if owner else 'Saved contact'),sid,owner_scope=owner))
+        registry.extend(phone_tools(store.normalize_phone(phone),recognized or ('John Rector' if owner else 'Saved contact'),sid,owner_scope=owner,source_request=owner_text if owner_sms else ''))
         if owner:registry.extend(owner_call_tools(store.normalize_phone(phone),sid))
     if contact_assistance:registry.append(meeting_time_tool())
     if contact_assistance or owner:

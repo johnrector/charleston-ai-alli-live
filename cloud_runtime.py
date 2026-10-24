@@ -15,6 +15,7 @@ from pathlib import Path
 import shutil
 import tarfile
 import tempfile
+import threading
 import urllib.request
 import communication_store as store
 from google_store import cipher
@@ -61,6 +62,7 @@ class CloudRuntime:
         self.thread=None;self.apps=[];self.tools={};self.skills=[];self.login=None
         self.state='starting';self.error='';self.profile=None;self.lock_db=None
         self.refresh_lock=asyncio.Lock();self.last_credentials=''
+        self.credentials_lock=threading.Lock()
 
     def status(self):
         return dict(status=self.state,error=self.error,version=VERSION,
@@ -108,6 +110,11 @@ class CloudRuntime:
             self.last_credentials=hashlib.sha256(data).hexdigest()
 
     def persist(self):
+        # Serialize timer and tool-call writes so an older snapshot cannot
+        # overwrite a newly rotated refresh token.
+        with self.credentials_lock:self.persist_locked()
+
+    def persist_locked(self):
         if not self.profile:return
         path=self.profile/'auth.json'
         if not path.is_file():return
@@ -152,7 +159,7 @@ class CloudRuntime:
             await self.refresh()
             while True:
                 await asyncio.sleep(30);await asyncio.to_thread(self.persist)
-                if self.process.returncode is not None:raise ValueError('Runtime stopped')
+                if self.process.returncode is not None or self.reader.done():raise ValueError('Runtime stopped')
         except asyncio.CancelledError:raise
         except Exception as exc:
             logger.warning('Cloud app runtime failed during %s (%s); retrying in 30 seconds',phase,type(exc).__name__)
