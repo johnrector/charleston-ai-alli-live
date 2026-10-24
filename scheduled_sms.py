@@ -168,7 +168,7 @@ def receipt(request_id, message_sid=None, status='submitted', error_code=None, c
         db.execute('''UPDATE alli_outbound_sms SET status=%s,message_sid=coalesce(message_sid,%s),
             error_code=coalesce(%s,error_code),updated_at=now() WHERE request_id=%s''',
             (status, message_sid, str(error_code)[:20] if error_code else None, request_id))
-        if request_id.startswith('dashboard-login:') and status != 'uncertain':
+        if request_id.startswith(('dashboard-login:','owner-auth:')) and status != 'uncertain':
             db.execute("UPDATE alli_outbound_sms SET body='Dashboard sign-in code [redacted after provider acceptance]' WHERE request_id=%s",(request_id,))
         if status in TERMINAL | {'submitted', 'uncertain'}:
             store.notify(db, 'outbound-sms:' + request_id + ':' + status,
@@ -188,6 +188,8 @@ class ScheduledSMS:
         row = await asyncio.to_thread(claim)
         if not row: return False
         try:
+            import security_controls as security
+            await asyncio.to_thread(security.reserve_sms,row['phone'],'scheduled:'+row['request_id'],row['body'])
             context = row.get('context') or {}
             if context.get('kind') == 'cloud_work':
                 from work_store import revalidate
@@ -215,9 +217,10 @@ class ScheduledSMS:
         except Exception as exc:
             # Only an explicit Twilio HTTP rejection is known to be unsent.
             from twilio.base.exceptions import TwilioRestException
-            rejected = isinstance(exc, TwilioRestException) and 400 <= exc.status < 500
+            from security_controls import Limited
+            rejected = isinstance(exc,Limited) or (isinstance(exc, TwilioRestException) and 400 <= exc.status < 500)
             await asyncio.to_thread(receipt, row['request_id'], status='failed' if rejected else 'uncertain',
-                                    error_code=getattr(exc, 'code', None))
+                                    error_code='usage_limit' if isinstance(exc,Limited) else getattr(exc, 'code', None))
             log.warning('outbound_sms_attempt_ended request_id=%s status=%s', row['request_id'], 'failed' if rejected else 'uncertain')
         return True
 

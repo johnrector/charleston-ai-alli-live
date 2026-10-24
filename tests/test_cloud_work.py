@@ -112,9 +112,8 @@ def test_account_write_pauses_before_any_provider_call(monkeypatch):
     monkeypatch.setattr(agent.runtime,'tools',{'mail.send':{'name':'mail.send','annotations':{'readOnlyHint':False}}})
     invoke=AsyncMock();monkeypatch.setattr(agent.runtime,'invoke',invoke)
     args={'tool_name':'mail.send','arguments_json':'{"to":"someone@example.com"}'}
-    with pytest.raises(agent.Waiting) as pending:
+    with pytest.raises(ValueError,match='not enabled'):
         asyncio.run(agent.execute({'id':'A','scope':'owner'},NS(name='run_connected_tool',arguments=json.dumps(args),call_id='C')))
-    assert pending.value.approval['arguments']==args
     invoke.assert_not_called()
 
 
@@ -181,7 +180,7 @@ def test_new_owner_routes_are_locked_and_cookie_writes_keep_csrf(monkeypatch):
 def test_result_page_escapes_requester_content_and_exposes_only_bound_files(monkeypatch):
     monkeypatch.setenv('DEMO_KEY','test-secret')
     job={'id':'ABC','phone':FRIEND,'state':'completed','created_at':datetime.now(timezone.utc).isoformat(),
-         'title':'<script>bad()</script>','result':'<img src=x onerror=bad()> https://example.com/a','sources':[]}
+         'scope':'friend','title':'<script>bad()</script>','result':'<img src=x onerror=bad()> https://example.com/a','sources':[]}
     monkeypatch.setattr(jobs,'read',lambda wid:job)
     monkeypatch.setattr(routes,'files',lambda wid,content=False:[{'id':'FILE','filename':'result.pdf','content_type':'application/pdf','content':b'%PDF'}])
     app=FastAPI();routes.install_work(app);client=TestClient(app)
@@ -229,24 +228,29 @@ def test_cancelled_job_cannot_call_account_tools(monkeypatch):
 def test_routine_delegated_write_executes_without_reconfirmation(monkeypatch):
     from contextlib import contextmanager
     monkeypatch.setattr(jobs,'read',lambda wid:{'state':'running'})
-    monkeypatch.setattr(agent.runtime,'tools',{'mail.send':{'name':'mail.send','annotations':{'readOnlyHint':False}}})
+    monkeypatch.setattr(agent.runtime,'tools',{'gmail.send_email':{'name':'gmail.send_email','annotations':{'readOnlyHint':False}}})
     monkeypatch.setattr(agent,'delegated_authority',AsyncMock(return_value={'allowed':True,'reason':'Complete original send instruction'}))
     invoke=AsyncMock(return_value={'ok':True,'message_id':'sent-receipt'});monkeypatch.setattr(agent.runtime,'invoke',invoke)
-    db=Mock();db.execute.return_value.fetchone.return_value=None
+    db=Mock();db.execute.return_value.fetchone.return_value=None;db.execute.return_value.fetchall.return_value=[]
     @contextmanager
     def connection():yield db
     monkeypatch.setattr(store:=agent.store,'connection',connection)
     monkeypatch.setattr(jobs,'event',Mock())
-    args={'tool_name':'mail.send','arguments_json':'{"to":"jane@example.com","body":"Requested message"}'}
-    result=asyncio.run(agent.execute({'id':'A','scope':'owner','instruction':'Send Jane the requested message'},NS(name='run_connected_tool',arguments=json.dumps(args),call_id='C'),object()))
+    args={'tool_name':'gmail.send_email','arguments_json':'{"to":"jane@example.com","body":"Requested message"}'}
+    result=asyncio.run(agent.execute({'id':'A','scope':'owner','phone':OWNER,'instruction':'Send jane@example.com the requested message'},NS(name='run_connected_tool',arguments=json.dumps(args),call_id='C'),object()))
     assert result['message_id']=='sent-receipt'
     invoke.assert_awaited_once()
 
 
 def test_changed_arguments_do_not_reuse_an_old_action_approval(monkeypatch):
     monkeypatch.setattr(jobs,'read',lambda wid:{'state':'running'})
-    monkeypatch.setattr(agent.runtime,'tools',{'mail.send':{'name':'mail.send','annotations':{'readOnlyHint':False}}})
+    monkeypatch.setattr(agent.runtime,'tools',{'gmail.send_email':{'name':'gmail.send_email','annotations':{'readOnlyHint':False}}})
+    from contextlib import contextmanager
+    db=Mock();db.execute.return_value.fetchall.return_value=[]
+    @contextmanager
+    def connection():yield db
+    monkeypatch.setattr(agent.store,'connection',connection)
     policy=AsyncMock(return_value={'allowed':False,'reason':'Different recipient'});monkeypatch.setattr(agent,'delegated_authority',policy)
-    job={'id':'A','scope':'owner','instruction':'Send Jane a message','approval':{'call_id':'C','decision':'approved','arguments':{'tool_name':'mail.send','arguments_json':'{"to":"jane@example.com"}'}}}
-    with pytest.raises(agent.Waiting):asyncio.run(agent.execute(job,NS(name='run_connected_tool',arguments=json.dumps({'tool_name':'mail.send','arguments_json':'{"to":"other@example.com"}'}),call_id='C'),object()))
-    policy.assert_awaited_once()
+    job={'id':'A','scope':'owner','phone':OWNER,'instruction':'Send jane@example.com a message','approval':{'call_id':'C','decision':'approved','arguments':{'tool_name':'gmail.send_email','arguments_json':'{"to":"jane@example.com"}'}}}
+    with pytest.raises(ValueError,match='recipient John supplied'):asyncio.run(agent.execute(job,NS(name='run_connected_tool',arguments=json.dumps({'tool_name':'gmail.send_email','arguments_json':'{"to":"other@example.com"}'}),call_id='C'),object()))
+    policy.assert_not_awaited()

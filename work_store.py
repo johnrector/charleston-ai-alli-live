@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 import communication_store as store
 import scheduled_sms as sms
 
-FIELDS = 'id,phone,contact_name,scope,title,instruction,state,response_id,result,sources,error,outbound_id,notify,created_at,updated_at'
+FIELDS = 'id,phone,contact_name,scope,title,instruction,state,response_id,result,sources,error,outbound_id,notify,link_revoked,private_result,internal,created_at,updated_at'
 STATES = ('queued','running','waiting','needs_john','completed','partial','blocked','cancelled')
 
 def initialize(db):
@@ -21,6 +21,10 @@ def initialize(db):
       approval jsonb,outbound_id text,notify boolean NOT NULL DEFAULT true,
       created_at timestamptz NOT NULL DEFAULT now(),updated_at timestamptz NOT NULL DEFAULT now())''')
     db.execute('CREATE INDEX IF NOT EXISTS alli_work_queue ON alli_work(state,created_at)')
+    db.execute('ALTER TABLE alli_work ADD COLUMN IF NOT EXISTS link_revoked boolean NOT NULL DEFAULT false')
+    db.execute('ALTER TABLE alli_work ADD COLUMN IF NOT EXISTS private_result boolean NOT NULL DEFAULT false')
+    db.execute('ALTER TABLE alli_work ADD COLUMN IF NOT EXISTS internal boolean NOT NULL DEFAULT false')
+    db.execute('CREATE INDEX IF NOT EXISTS alli_work_phone_history ON alli_work(phone,created_at DESC)')
     db.execute('''CREATE TABLE IF NOT EXISTS alli_work_file (
       id text PRIMARY KEY,work_id text NOT NULL REFERENCES alli_work(id),filename text NOT NULL,
       content_type text NOT NULL,content bytea NOT NULL,created_at timestamptz NOT NULL DEFAULT now())''')
@@ -47,12 +51,16 @@ def owner(phone):
     return bool(configured and store.normalize_phone(phone)==configured)
 
 def allowed(db,phone):
+    if db.execute('SELECT 1 FROM alli_security_block WHERE phone=%s',(phone,)).fetchone():return False
     if owner(phone):return True
     row=db.execute('SELECT source FROM alli_contact_name WHERE phone=%s',(phone,)).fetchone()
     return bool(row and row[0] in ('owner_saved_contact','apple_favorite','owner_supplied_mission'))
 
 def event(db,wid,kind,details=None):
     db.execute('INSERT INTO alli_work_event(work_id,kind,details) VALUES(%s,%s,%s)',(wid,kind,Jsonb(details or {})))
+
+def heartbeat(wid):
+    with store.connection() as db:db.execute("UPDATE alli_work SET updated_at=now() WHERE id=%s AND state='running'",(wid,))
 
 def serial(row):
     return {k:v.isoformat() if isinstance(v,datetime) else v for k,v in dict(row).items()}
@@ -67,13 +75,14 @@ def read(wid,phone=None,internal=False):
 def listing(phone=None):
     store.initialize()
     with store.connection() as db,db.cursor(row_factory=dict_row) as cur:
-        cur.execute('SELECT '+FIELDS+' FROM alli_work'+(' WHERE phone=%s' if phone else '')+' ORDER BY created_at DESC LIMIT 100',(phone,) if phone else ())
+        cur.execute('SELECT '+FIELDS+' FROM alli_work'+(' WHERE phone=%s AND NOT internal' if phone else '')+' ORDER BY created_at DESC LIMIT 100',(phone,) if phone else ())
         return [serial(r) for r in cur.fetchall()]
 
-def create(phone,name,title,instruction,sid,*,owner_scope=False,notify=True,context=None):
+def create(phone,name,title,instruction,sid,*,owner_scope=False,notify=True,context=None,internal=False):
     phone=store.normalize_phone(phone)
     if not phone:raise ValueError('A verified sender number is required')
     if owner_scope and not owner(phone):raise ValueError('Owner tools are restricted to John')
+    if internal and (owner_scope or not (context or {}).get('call_recovery_sid')):raise ValueError('Internal review requires a captured call and no account tools')
     title=clean(title,180);instruction=clean(instruction,6000);sid=clean(sid,180)
     dedupe=hashlib.sha256((phone+'|'+sid+'|'+instruction).encode()).hexdigest()
     store.initialize()
@@ -82,16 +91,19 @@ def create(phone,name,title,instruction,sid,*,owner_scope=False,notify=True,cont
         prior=db.execute('SELECT id FROM alli_work WHERE dedupe=%s',(dedupe,)).fetchone()
         if prior:return dict(ok=True,work_id=prior[0],duplicate=True,state=read(prior[0],phone)['state'])
         if not allowed(db,phone):raise ValueError("John must approve this number before cloud work can start")
-        active=db.execute("SELECT count(*) FROM alli_work WHERE phone=%s AND state IN ('queued','running','waiting','needs_john')",(phone,)).fetchone()[0]
-        today=db.execute("SELECT count(*) FROM alli_work WHERE phone=%s AND created_at>now()-interval '24 hours'",(phone,)).fetchone()[0]
-        if active>=int(os.getenv('ALLI_WORK_ACTIVE_PER_CONTACT','3')) or today>=int(os.getenv('ALLI_WORK_DAILY_PER_CONTACT','10')):
+        from security_controls import reserve_in_db
+        if not internal:reserve_in_db(db,'cloud_job',phone,dedupe)
+        active=db.execute("SELECT count(*) FROM alli_work WHERE phone=%s AND NOT internal AND state IN ('queued','running','waiting','needs_john')",(phone,)).fetchone()[0]
+        today=db.execute("SELECT count(*) FROM alli_work WHERE phone=%s AND NOT internal AND created_at>now()-interval '24 hours'",(phone,)).fetchone()[0]
+        if not internal and (active>=int(os.getenv('ALLI_WORK_ACTIVE_PER_CONTACT','3')) or today>=int(os.getenv('ALLI_WORK_DAILY_PER_CONTACT','10'))):
             raise ValueError('Your cloud work limit is reached. Finish existing work or ask John to review it.')
-        total=db.execute("SELECT count(*) FROM alli_work WHERE created_at>now()-interval '24 hours'").fetchone()[0]
-        if total>=int(os.getenv('ALLI_WORK_DAILY_TOTAL','100')):raise ValueError('Cloud work is at capacity; John can review it')
+        total=db.execute("SELECT count(*) FROM alli_work WHERE NOT internal AND created_at>now()-interval '24 hours'").fetchone()[0]
+        if not internal and total>=int(os.getenv('ALLI_WORK_DAILY_TOTAL','100')):raise ValueError('Cloud work is at capacity; John can review it')
         wid=secrets.token_hex(6).upper()
-        db.execute('''INSERT INTO alli_work(id,dedupe,phone,contact_name,scope,title,instruction,context,notify)
-          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)''',(wid,dedupe,phone,clean(name or 'Saved contact',100),
-          'owner' if owner_scope else 'friend',title,instruction,Jsonb(context or {}),notify))
+        db.execute('''INSERT INTO alli_work(id,dedupe,phone,contact_name,scope,title,instruction,context,notify,private_result,internal)
+          VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)''',(wid,dedupe,phone,clean(name or 'Saved contact',100),
+          'owner' if owner_scope else 'friend',title,instruction,Jsonb(context or {}),notify,
+          bool(internal or owner_scope or (owner(phone) and ((context or {}).get('group_notes') or (context or {}).get('group_delegation') or (context or {}).get('source_sid')))),internal))
         event(db,wid,'queued')
         store.notify(db,'work:'+wid+':queued',dict(source='cloud_work',work_id=wid,phone=phone,status='queued',summary='Cloud work queued: '+title))
     return dict(ok=True,work_id=wid,state='queued',message='Saved to the cloud work queue. Work continues after this conversation ends. Not completed yet.')
@@ -114,6 +126,7 @@ def claim():
           ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
         if not row:return None
         db.execute("UPDATE alli_work SET state='running',updated_at=now() WHERE id=%s",row)
+        store.notify(db,'work:'+row[0]+':started',dict(source='cloud_work',work_id=row[0],status='working',summary='Cloud work started'))
     return read(row[0],internal=True)
 
 def update(wid,**values):
@@ -131,9 +144,10 @@ def result_url(job):
     return 'https://'+os.getenv('TWILIO_VOICE_PUBLIC_DOMAIN','charleston-ai-alli-gpt-live.onrender.com')+'/work/'+job['id']+'/'+result_token(job)
 
 def valid_token(job,token):
-    if not job or not hmac.compare_digest(result_token(job),token):return False
+    if not job or job.get('link_revoked') or not hmac.compare_digest(result_token(job),token):return False
+    if __import__('security_controls').blocked(job['phone']):return False
     created=datetime.fromisoformat(job['created_at']) if isinstance(job['created_at'],str) else job['created_at']
-    return created>datetime.now(timezone.utc)-timedelta(days=14)
+    return created>datetime.now(timezone.utc)-timedelta(days=7)
 
 def cached_file(wid,key):
     with store.connection() as db:
@@ -175,7 +189,7 @@ def finish(wid,result,sources,files,*,outcome='completed'):
         if job[4]:
             row=dict(id=wid,phone=job[0]);link=result_url(row)
             lead={'completed':'Your work is ready','partial':'I finished part of your work; some steps still need attention','blocked':'Your work needs attention; I saved the details'}[outcome]
-            message=f"Alli: {lead} — {job[2]}.\n{link}\nReply here with any changes you'd like. This private result link expires in 14 days."
+            message=f"Alli: {lead} — {job[2]}.\n{link}\nReply here with any changes you'd like. This result link expires in 7 days."
             rid='work-result:'+wid
             sms.enqueue_in_db(db,sms.TextMessage(request_id=rid,phone=job[0],recipient_name=job[1],message=message),context=dict(kind='cloud_work',work_id=wid))
             db.execute('UPDATE alli_work SET outbound_id=%s WHERE id=%s',(rid,wid))

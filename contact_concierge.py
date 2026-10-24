@@ -105,6 +105,8 @@ def reminder_tool(phone, name, receipt):
     async def create_reminder_for_john(text: str, remind_at: str, confirmed: bool=False) -> dict:
         """Save a private, non-busy calendar reminder for John at an agreed future ISO datetime. The sender must request the reminder and supply/agree its text and time. A complete explicit request is sufficient. No SMS/email is sent; claim only a calendar reminder after ok=true and event_id."""
         if confirmed is not True:return {'ok':False,'error':'Obtain the reminder text and exact date/time first'}
+        import security_controls as security
+        await __import__('asyncio').to_thread(security.reserve,'reminder_write',phone,hashlib.sha256((text+remind_at).encode()).hexdigest())
         result=await g.safely(reminder,phone,name,text,remind_at)
         await receipt('create_reminder_for_john',result)
         return result

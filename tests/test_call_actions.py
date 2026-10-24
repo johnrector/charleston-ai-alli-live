@@ -11,6 +11,7 @@ from mcp_integration import manual_capabilities
 
 
 def body(**kw):
+    kw.setdefault('email','jim@example.com')
     return p.OutboundCall(request_id='full-test', phone='+12025550123', recipient_name='Jim Reilly',
         mission='Move our meeting to 6:30 and email confirmation', capabilities=['check_calendar', 'create_meeting', 'manage_calendar', 'send_email'], **kw)
 
@@ -41,7 +42,7 @@ def test_reschedule_preserves_event_and_notifies_after_version_check(monkeypatch
         if path.endswith('/events'): return {'items':[deepcopy(saved)]}
         return deepcopy(saved)
     monkeypatch.setattr(g,'api',api)
-    result=a.reschedule('meeting1','Jim Reilly','','2030-01-07T18:30:00-05:00',30)
+    result=a.reschedule('meeting1','Jim Reilly','jim@example.com','2030-01-07T18:30:00-05:00',30)
     assert result['ok'] and saved['start']['dateTime'].endswith('18:30:00-05:00')
     patch=next(c for c in calls if c[0]=='PATCH')
     assert set(patch[2]['body'])=={'start','end'}
@@ -49,7 +50,7 @@ def test_reschedule_preserves_event_and_notifies_after_version_check(monkeypatch
     assert patch[2]['params']=={'sendUpdates':'all'}
     assert saved['attendees']==event()['attendees'] and saved['location']=='Office'
     # Repeating the same agreed change only reads, without another notification.
-    a.reschedule('meeting1','Jim Reilly','','2030-01-07T18:30:00-05:00',30)
+    a.reschedule('meeting1','Jim Reilly','jim@example.com','2030-01-07T18:30:00-05:00',30)
     assert sum(c[0]=='PATCH' for c in calls)==1
 
 
@@ -60,10 +61,12 @@ def test_conflict_blocks_reschedule(monkeypatch):
         return {'items':[{'id':'other','status':'confirmed'}]} if path.endswith('/events') else event()
     monkeypatch.setattr(g,'api',api)
     with pytest.raises(ValueError,match='another event'):
-        a.reschedule('meeting1','Jim Reilly','','2030-01-07T18:30:00-05:00',30)
+        a.reschedule('meeting1','Jim Reilly','jim@example.com','2030-01-07T18:30:00-05:00',30)
 
 
 def test_runtime_requires_read_and_consent_and_preserves_shared_registry(monkeypatch):
+    import contact_events
+    monkeypatch.setattr(contact_events,'belongs',lambda e,p,email:any(a.get('email')==email for a in e.get('attendees',[])))
     monkeypatch.setattr(a,'events_in_window',lambda *args:[event(),{**event(),'id':'unrelated','summary':'Other','attendees':[]}])
     move=Mock(return_value={'ok':True,'event_id':'meeting1'}); monkeypatch.setattr(a,'reschedule',move)
     report=SimpleNamespace(name='report',to_realtime_format=lambda:{'name':'report'})
@@ -143,7 +146,7 @@ def test_cancel_preserves_recipient_binding_and_uses_version(monkeypatch):
         if method=='DELETE': saved['status']='cancelled'; return {}
         return deepcopy(saved)
     monkeypatch.setattr(g,'api',api)
-    assert a.cancel('meeting1','Jim Reilly','')['cancelled']
+    assert a.cancel('meeting1','Jim Reilly','jim@example.com')['cancelled']
     assert calls[1]==('DELETE',{'params':{'sendUpdates':'all'},'extra_headers':{'If-Match':'version1'}})
 
 

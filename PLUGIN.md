@@ -109,8 +109,10 @@ attention needed. An accepted/submitted SMS is not proof of delivery. Reports
 are model-reported; action IDs and successful tool responses provide stronger
 completion evidence. Never automatically redial/resend uncertain interactions.
 
-Voice webhook failure uses the existing Netlify callback route, which forwards
-to +1 843 327 6008. A disconnected media stream also returns to that fallback.
+Inbound voice failure uses `/inbound/fallback`, which gives a brief text-back
+instruction and ends the call. Never forward untrusted incoming callers to
+John's personal number. The phone number's VoiceFallbackUrl must match this
+safe route; deployment verification checks that transport configuration.
 A 15-second no-audio watchdog closes a silent stream to trigger fallback.
 The service is one always-on Render process; transport sessions are in-memory,
 while missions, SMS work, transcripts and owner updates are in Postgres.
@@ -373,7 +375,7 @@ using `start_cloud_work`, check `get_my_work`, supply missing information with
 `continue_cloud_work`, and cancel unfinished work. Work persists in Postgres;
 ending a call or putting the phone down does not stop it. The hosted executor
 uses GPT-6.1 Sol with high reasoning, current web search and hosted shell skills.
-It retrieves actual files into durable storage, returns a private 14-day result
+It retrieves actual files into durable storage, returns a expiring 7-day result
 link by the existing SMS outbox, and tracks result-message delivery separately.
 Generated, partial, blocked, queued, sent and delivered are distinct states.
 
@@ -401,3 +403,75 @@ The private dashboard now includes Work and Tools & skills. The private skills
 snapshot imports enabled workflows and resources, not passwords or desktop
 sessions. Availability of instructions does not make a missing tool usable.
 Use a genuine cloud equivalent or report the missing dependency honestly.
+
+
+## Delegation, group calls and owner controls — October 24, 2026
+
+Alli's purpose is finished work. Treat a clear imperative as an assignment,
+including a playful one. Pick sensible details, persist the job, continue after
+hangup, and text the actual result or blocker. Ordinary accepted work does not
+require another confirmation. A joke alone is not execution. Do not pretend a
+plan made someone rich/famous or paid their taxes.
+
+OpenAI GPT-Live-1 controls the full-duplex conversation and delegation timing.
+GPT-6.1 Sol with high reasoning handles backend work. Twilio carries PSTN/audio
+and SMS. Do not replace this architecture with Twilio conversational products,
+manual turn detection or a different OpenAI voice family. The official Live
+prompt uses Backchannel policy, Interruption policy, Delegation policy and
+Generate <|SpawnThinking|>. Detailed business rules belong in the backend.
+
+The pinned TAC provider extension observes the existing primary OpenAI event
+stream to retain transcript fragments/timestamps, audit backend work and enforce
+budgets; it does not take over listening or speaking. Voice transcript fragments
+and work progress checkpoint in Postgres. Post-call recovery reviews only calls
+started after the rollout, respects existing jobs/tool receipts, and recovers
+unfinished delegated assignments. Its review has no tools or notification;
+actual child jobs execute and notify. A shared line never gains owner-account
+permissions through hangup recovery. No old calls are replayed at deployment.
+
+When a group is introduced, OpenAI triggers group-note mode, announces notes,
+and listens without competing. Record explicit participants/assignments; mixed
+phone audio does not establish each speaker's identity. Keep group notes
+separate from any earlier private preamble. Pause/clear notes on objection.
+Requested action-item texts contain only the bound approved participant's items,
+with a specific offer of feasible help. Being listed is not itself delegation.
+Unknown recipients and unclear owners go to John, without guessed delivery.
+
+Names/phone matches personalize greetings. Private owner actions require a
+12-hour verified SMS session or a grant bound to that specific inbound CallSid.
+A verified dashboard login also verifies owner texting. A shared call has narrower
+permissions even when John's number originated it. Saved contacts keep natural
+availability/new-booking help; existing private meeting/work details on voice
+require the carrier's A attestation or a text from their saved number.
+
+Phone account tools use an explicit Google productivity allowlist; installed
+hosting, financial, security-admin and public-sharing tools are outside it.
+Original assignments and real sender clarifications constrain recipients/actions.
+Friends have only their own bound meetings, messages and public/file work.
+Meeting ownership requires saved invitation email or an exact owner-approved
+phone/event binding; a caller's name never grants access. Shared meetings with
+other guests require John’s review before a participant can change them.
+
+Default saved-contact ceilings: 4 calendar changes/day, 8/7 days, 3 upcoming
+meetings within 90 days, 5 cloud jobs/day, and 3 active jobs. Additional call,
+message/segment, model and global limits apply. Calendar suggestions default to
+daily 9–5 Eastern; actual availability always comes from the live calendar.
+Suspension cancels pending jobs/messages and blocks new access. Delete moves
+the contact out of the active directory while retaining a recoverable profile,
+access tombstone and owner activity. The owner can restore it from Deleted.
+Already-dispatched external actions remain subject to their actual receipts.
+
+The authenticated owner Activity view searches/paginates all retained updates,
+opens conversations and work receipts, and provides contact lifecycle controls,
+result-link revocation, session controls and an editable shareable profile.
+Owner account-work results require owner sign-in. Friends' result links remain
+accountless, expire after 7 days, and are revocable. Cached binaries are retained
+for 14 days; textual results/history remain in the database.
+
+Basic public facts are seeded from John's site and ai-chs.com, separately from
+private account data. The profile includes who Alli/John are, lab address, hours,
+rates and booking/payment basics. Answer supplied facts conversationally; use
+real delegation for live availability, sending, changes and actual work.
+Say "Checking" only with real backend work. Recheck time-sensitive public facts
+when the profile is older than 30 days. Do not turn a personal meeting into a
+paid service merely because the lab's published rates are known.

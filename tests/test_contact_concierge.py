@@ -1,3 +1,6 @@
+def full_instructions(session):
+    return session['instructions']+'\n'+session.get('delegation',{}).get('responses',{}).get('instructions','')
+
 import asyncio
 from copy import deepcopy
 from contextlib import contextmanager
@@ -9,7 +12,7 @@ import inbound_communications as inbound
 import google_integration as g
 from test_inbound import BASE, Memory, SID, CALLER
 
-CONTACT={'contact':{'name':'Jane Doe','source':'owner_supplied_mission','email':'jane@example.com','is_owner':False},'history':[]}
+CONTACT={'number_verified':True,'contact':{'name':'Jane Doe','source':'owner_supplied_mission','email':'jane@example.com','is_owner':False},'history':[]}
 
 @pytest.mark.parametrize('source,channel,allowed',[
     ('owner_supplied_mission','sms',True),('owner_saved_contact','sms',True),
@@ -30,8 +33,8 @@ def test_saved_sms_no_identity_roundtrip_and_old_window_does_not_apply(monkeypat
         reg={t.name:t for t in tools}
         assert {'create_meeting','check_calendar','find_meetings','update_meeting','create_reminder_for_john'}<=reg.keys()
         assert 'send_email' not in reg and 'save_friend_contact' not in reg
-        assert 'obsolete window' not in session['instructions']
-        assert '"identity_confirmed": true' in session['instructions']
+        assert 'obsolete window' not in full_instructions(session)
+        assert '"identity_confirmed": true' in full_instructions(session)
         assert (await reg['check_calendar'](start_datetime='2026-11-02T13:00:00-05:00',end_datetime='2026-11-02T14:00:00-05:00'))['ok']
         assert (await reg['confirm_identity'](name='Jane'))['confirmation_required'] is False
         assert session['model']==BASE['model']
@@ -63,9 +66,9 @@ def test_calendar_read_does_not_expose_busy_blocks(monkeypatch):
 def test_owner_recognized_on_voice_without_confirming_old_mission(monkeypatch):
     monkeypatch.setenv('ALLI_OWNER_PHONE',CALLER)
     session,tools=asyncio.run(inbound.build_session(BASE,{},SID,CALLER,'voice',Memory()))
-    assert "OPENING: Hi John" in session['instructions']
-    assert '"identity_confirmed": true' in session['instructions']
-    assert 'that they want to continue the prior mission' not in session['instructions']
+    assert "OPENING: Hi John" in full_instructions(session)
+    assert '"identity_confirmed": true' in full_instructions(session)
+    assert 'that they want to continue the prior mission' not in full_instructions(session)
     assert asyncio.run({t.name:t for t in tools}['confirm_identity'](name='John'))['confirmation_required'] is False
 
 
@@ -120,8 +123,8 @@ def test_both_channels_start_identified_and_can_book(monkeypatch,channel):
     async def run():
         session,tools=await inbound.build_session(BASE,CONTACT,SID,CALLER,channel,memory)
         reg={t.name:t for t in tools}
-        assert '"identity_confirmed": true' in session['instructions']
-        assert 'OPENING: Hi Jane' in session['instructions']
+        assert '"identity_confirmed": true' in full_instructions(session)
+        assert 'OPENING: Hi Jane' in full_instructions(session)
         assert (await reg['create_meeting'](start_datetime='2026-11-02T13:00:00-05:00',duration_minutes=60,title='Meeting with John',recipient_email_address='jane@example.com',confirmed=True))['event_id']=='booked'
     asyncio.run(run())
 
@@ -180,14 +183,14 @@ def test_exact_duration_is_elapsed_across_dst(monkeypatch,start,end):
 def test_exact_time_tool_available_on_both_contact_channels(channel):
     session,tools=asyncio.run(inbound.build_session(BASE,CONTACT,SID,CALLER,channel,Memory()))
     assert 'check_meeting_time' in {t.name for t in tools}
-    assert 'An availability question is not permission to book' in session['instructions']
+    assert 'An availability question is not permission to book' in full_instructions(session)
 
 @pytest.mark.parametrize('channel',['sms','voice'])
 def test_new_contacts_require_john_approval_and_have_no_calendar_tools(channel):
     session,tools=asyncio.run(inbound.build_session(BASE,{},SID,CALLER,channel,Memory()))
     assert not {'check_meeting_time','check_calendar','create_meeting','find_meetings'} & {t.name for t in tools}
-    assert "Since you're not on John's pre-approved list" in session['instructions']
-    assert 'save the request with report_call_outcome' in session['instructions']
+    assert "Since you're not on John's pre-approved list" in full_instructions(session)
+    assert 'save the request with report_call_outcome' in full_instructions(session)
 
 @pytest.mark.parametrize('channel',['sms','voice'])
 def test_unnamed_favorite_can_check_then_introduce_and_book(monkeypatch,channel):
@@ -199,8 +202,8 @@ def test_unnamed_favorite_can_check_then_introduce_and_book(monkeypatch,channel)
     async def run():
         session,tools=await inbound.build_session(BASE,context,SID,CALLER,channel,memory)
         reg={t.name:t for t in tools}
-        assert "OPENING: Hi, this is Alli" in session['instructions']
-        assert '"identity_confirmed": true' in session['instructions']
+        assert "OPENING: Hi, this is Alli" in full_instructions(session)
+        assert '"identity_confirmed": true' in full_instructions(session)
         assert (await reg['check_meeting_time'](start_datetime='2030-01-04T11:00:00-05:00'))['available']
         args=dict(start_datetime='2030-01-04T11:00:00-05:00',duration_minutes=60,title='Meeting',recipient_email_address='jane@example.com',confirmed=True)
         assert not (await reg['create_meeting'](**args))['ok']

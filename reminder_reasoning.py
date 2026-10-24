@@ -40,10 +40,14 @@ async def draft_followup(item,client=None):
     api=client or AsyncOpenAI(timeout=60,max_retries=0)
     try:
         context=await asyncio.to_thread(context_for,item)
+        import security_controls as security
+        ref='reminder-draft:'+str(item.get('request_id') or item.get('event_id'))+':'+str(item.get('send_at',''))
+        await asyncio.to_thread(security.model,item['phone'],ref,4096)
         response=await api.responses.create(model=MODEL,reasoning=dict(REASONING),instructions=INSTRUCTIONS,
             input=json.dumps(context,default=str),max_output_tokens=4096,store=False,
             text={'format':{'type':'json_schema','name':'reminder_question','strict':True,'schema':{
                 'type':'object','properties':{'question':{'type':'string','maxLength':180}},'required':['question'],'additionalProperties':False}}})
+        await asyncio.to_thread(security.settle_model,ref,getattr(response.usage,'output_tokens',None) if getattr(response,'usage',None) else None)
         question=json.loads(response.output_text)['question'].strip()
         if len(question)>180 or any(c in question for c in ('\n','<','>')) or 'http' in question.casefold():raise ValueError('Invalid reminder question')
         message=item['message']

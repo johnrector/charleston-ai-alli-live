@@ -4,7 +4,7 @@ import html
 import re
 from urllib.parse import quote
 from fastapi import Depends,HTTPException,Request,Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse,RedirectResponse
 from pydantic import BaseModel,ConfigDict,Field
 import dashboard
 import work_store as jobs
@@ -22,7 +22,7 @@ class NewWork(Input):
     intent_id:str=Field(min_length=16,max_length=64,pattern='^[A-Za-z0-9-]+$')
     notify:bool=True
 class Change(Input):
-    action:str=Field(pattern='^(approve|deny|answer|cancel)$')
+    action:str=Field(pattern='^(approve|deny|answer|cancel|revoke_link)$')
     answer:str=Field(default='',max_length=6000)
 
 def files(wid,*,content=False):
@@ -36,7 +36,7 @@ def details():
         internal=jobs.read(row['id'],internal=True)
         row['approval']=internal['approval'];row['files']=files(row['id'])
         row['result']=row['result'][:2000]
-        if row['state'] in ('completed','partial','blocked') and row['result']:row['result_url']=jobs.result_url(row)
+        if row['state'] in ('completed','partial','blocked') and row['result']:row['result_url']='/dashboard/work/'+row['id']
         if row['outbound_id']:row['delivery_status']=__import__('scheduled_sms').get(row['outbound_id'])['status']
     return dict(ok=True,work=rows,runtime=runtime.status(),skills=cloud_skills.catalog())
 
@@ -76,6 +76,11 @@ def install_work(app):
     @app.post('/dashboard/api/work/{wid}',dependencies=[Depends(write)])
     async def change(wid:str,body:Change):
         try:
+            if body.action=='revoke_link':
+                with store.connection() as db:
+                    db.execute('UPDATE alli_work SET link_revoked=true WHERE id=%s',(wid,))
+                    jobs.event(db,wid,'result_link_revoked')
+                return dict(ok=True)
             if body.action in ('approve','deny'):return await asyncio.to_thread(work_agent.decision,wid,body.action=='approve')
             if body.action=='answer':return await asyncio.to_thread(work_agent.resume,wid,None,body.answer,john=True)
             return await asyncio.to_thread(jobs.cancel,wid)
@@ -98,24 +103,43 @@ def install_work(app):
         try:return await asyncio.to_thread(cloud_skills.import_bundle,bytes(data))
         except Exception:raise HTTPException(422,'Invalid skill archive. Use the prepared john-skills ZIP with manifest, catalog and resources.')
 
-    @app.get('/work/{wid}/{token}',include_in_schema=False)
-    async def result(wid:str,token:str):
+    async def render_result(wid,token=None,*,admin=False,request=None):
         job=await asyncio.to_thread(jobs.read,wid)
-        if not jobs.valid_token(job,token) or job['state'] not in ('completed','partial','blocked') or not job['result']:raise HTTPException(404,'Result unavailable or link expired')
+        if not job or (not admin and not jobs.valid_token(job,token)) or job['state'] not in ('completed','partial','blocked') or not job['result']:raise HTTPException(404,'Result unavailable or link expired')
+        if not admin and (job['scope']=='owner' or job.get('private_result')):
+            try:await auth(request)
+            except HTTPException:return RedirectResponse('/dashboard?result='+quote(wid,safe=''),status_code=303)
         artifacts=await asyncio.to_thread(files,wid)
-        downloads=''.join('<a class="file" href="'+quote(token,safe='')+'/files/'+f['id']+'">↓ '+html.escape(f['filename'])+'</a>' for f in artifacts)
+        prefix='/dashboard/api/work/'+quote(wid,safe='')+'/files/' if admin else '/work/'+quote(wid,safe='')+'/'+quote(token,safe='')+'/files/'
+        downloads=''.join('<a class="file" href="'+prefix+f['id']+'">↓ '+html.escape(f['filename'])+'</a>' for f in artifacts)
         sources=''.join('<li><a rel="noreferrer noopener" href="'+html.escape(s['url'],quote=True)+'">'+html.escape(s.get('title') or s['url'])+'</a></li>' for s in job['sources'] if s.get('url','').startswith(('https://','http://')))
         page='''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>Alli · Your work</title><style>body{margin:0;background:#f5f4ed;color:#233b2e;font:16px/1.7 system-ui,sans-serif}main{max-width:850px;margin:auto;padding:36px 24px}header{font-size:14px;letter-spacing:2px}h1{font:42px/1.1 Georgia,serif}a{color:#244f3b;overflow-wrap:anywhere}.file{display:inline-block;margin:5px 10px 15px 0;padding:12px 18px;background:#244f3b;color:white;border-radius:6px;text-decoration:none}.result{white-space:pre-wrap;overflow-wrap:anywhere;background:#fffef9;padding:24px;border:1px solid #dedfd5;border-radius:8px}.note{font-size:12px;color:#626e60}h2{font:28px Georgia,serif}</style><main><header>ALLI / JOHN RECTOR'S AI ASSISTANT</header><h1>'''+html.escape(job['title'])+'</h1>'+downloads+'<div class="result">'+link_text(job['result'])+'</div>'+('<h2>Sources</h2><ul>'+sources+'</ul>' if sources else '')+'<p class="note">Reply to Alli by call or text for changes. This private link expires 14 days after the request. Anyone you share the link with can read this result.</p></main></html>'
+        page=page.replace('expires 14 days','expires 7 days')
+        if admin:page=page.replace('This private link expires 7 days after the request. Anyone you share the link with can read this result.','Owner view. Your sign-in is required; revoking a recipient link does not remove this activity record.')
+        elif job['scope']=='owner' or job.get('private_result'):page=page.replace('Anyone you share the link with can read this result.','Your owner sign-in is required to read this result.')
         return HTMLResponse(page,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Robots-Tag':'noindex, nofollow','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY',
           'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"})
 
-    @app.get('/work/{wid}/{token}/files/{fid}',include_in_schema=False)
-    async def artifact(wid:str,token:str,fid:str):
-        job=await asyncio.to_thread(jobs.read,wid)
-        if not jobs.valid_token(job,token) or job['state'] not in ('completed','partial','blocked') or not job['result']:raise HTTPException(404,'File unavailable')
+    @app.get('/work/{wid}/{token}',include_in_schema=False)
+    async def result(wid:str,token:str,request:Request):return await render_result(wid,token,request=request)
+
+    @app.get('/dashboard/work/{wid}',dependencies=[Depends(auth)],include_in_schema=False)
+    async def owner_result(wid:str):return await render_result(wid,admin=True)
+
+    async def file_response(wid,fid):
         artifact=next((f for f in await asyncio.to_thread(files,wid,content=True) if f['id']==fid),None)
         if not artifact:raise HTTPException(404,'File unavailable')
         return Response(bytes(artifact['content']),media_type=artifact['content_type'],headers={
           'Content-Disposition':"attachment; filename*=UTF-8''"+quote(artifact['filename'],safe=''),
           'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Robots-Tag':'noindex, nofollow','X-Content-Type-Options':'nosniff',
           'Content-Security-Policy':"default-src 'none'; sandbox"})
+
+    @app.get('/dashboard/api/work/{wid}/files/{fid}',dependencies=[Depends(auth)],include_in_schema=False)
+    async def owner_artifact(wid:str,fid:str):return await file_response(wid,fid)
+
+    @app.get('/work/{wid}/{token}/files/{fid}',include_in_schema=False)
+    async def artifact(wid:str,token:str,fid:str,request:Request):
+        job=await asyncio.to_thread(jobs.read,wid)
+        if not jobs.valid_token(job,token) or job['state'] not in ('completed','partial','blocked') or not job['result']:raise HTTPException(404,'File unavailable')
+        if job['scope']=='owner' or job.get('private_result'):await auth(request)
+        return await file_response(wid,fid)

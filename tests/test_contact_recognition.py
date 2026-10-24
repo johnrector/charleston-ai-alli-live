@@ -3,6 +3,7 @@ from unittest.mock import Mock
 import communication_store as store
 
 def lookup(monkeypatch, rows, greetings, contact, owner=''):
+    if contact is not None:contact=tuple(contact)+(None,)*(4-len(contact))
     monkeypatch.setenv('ALLI_OWNER_PHONE',owner)
     monkeypatch.setattr(store,'initialize',lambda:None)
     db=Mock()
@@ -67,7 +68,20 @@ def test_owner_saved_number_normalizes_and_persists_optional_email(monkeypatch):
     monkeypatch.setattr(store,'connection',connection)
     result=store.save_contact('8435550100','Jane Doe','jane@example.com')
     assert result['phone']=='+18435550100'
-    assert db.execute.call_args.args[1]==('+18435550100','Jane Doe','jane@example.com')
+    insert=next(c for c in db.execute.call_args_list if 'INSERT INTO alli_contact_name' in c.args[0])
+    assert insert.args[1]==('+18435550100','Jane Doe','jane@example.com')
+
+def test_deleted_contact_cannot_reappear_through_old_mission(monkeypatch):
+    mission={'recipient_name':'Jane Doe'}
+    result=lookup(monkeypatch,[(mission,{})],[(mission,)],('Jane','owner_saved_contact','jane@example.com',True))
+    assert result['contact'] is None and result['mission'] is None
+
+def test_prompt_history_is_bounded_without_modifying_raw_transcripts():
+    rows=[dict(body='hello',reply='done',transcript=[dict(role='user',text='x'*20000)]) for _ in range(12)]
+    compact=store.history_window(rows)
+    assert len(__import__('json').dumps(compact))<17000
+    assert compact and compact[-1]['transcript_excerpt'].startswith('[Earlier transcript omitted]')
+    assert len(rows[-1]['transcript'][0]['text'])==20000
 
 
 def test_apple_favorite_is_authoritative_even_without_name(monkeypatch):

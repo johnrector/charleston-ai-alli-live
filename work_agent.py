@@ -25,8 +25,10 @@ PUBLIC_TOOLS={
  'zillow.get_zestimate','zillow.get_rent_zestimate','zillow.get_zestimate_info',
 }
 FINAL_FORMAT=dict(type='json_schema',name='finished_work',strict=True,schema=dict(type='object',
-  properties=dict(outcome=dict(type='string',enum=['completed','partial','blocked']),result=dict(type='string')),
-  required=['outcome','result'],additionalProperties=False))
+  properties=dict(outcome=dict(type='string',enum=['completed','partial','blocked']),result=dict(type='string'),
+    action_items=dict(type='array',items=dict(type='object',properties=dict(assignee=dict(type='string'),task=dict(type='string'),due=dict(type='string'),alli_offer=dict(type='string')),required=['assignee','task','due','alli_offer'],additionalProperties=False)),
+    pending_assignments=dict(type='array',items=dict(type='object',properties=dict(title=dict(type='string'),instruction=dict(type='string'),source_quote=dict(type='string')),required=['title','instruction','source_quote'],additionalProperties=False))),
+  required=['outcome','result','action_items','pending_assignments'],additionalProperties=False))
 RULES='''You are Alli, John Rector's AI assistant, doing delegated work in the cloud.
 The supplied request is the task, not a question to answer with a plan. Produce
 the finished work. Use judgment about structure, medium and useful next steps.
@@ -91,9 +93,16 @@ remember_work_preference; these do not grant access or verify facts about others
 Help is general, not limited to appointments. John's accounts, spending, other
 contacts and calendar remain protected; missing authority is something to ask
 John about, not permission to invent a successful action. Phone/text is the
-complete conversational interface; result/file links require no account or
-dashboard login. Attachments are not read unless a tool actually retrieves them.
+complete conversational interface. Friends' expiring result links need no account;
+John's private account-work results require his owner sign-in. Attachments are not
+read unless a tool actually retrieves them. A clear assignment, including a playful
+one, should become a saved job with sensible assumptions. Do not stop at a joke,
+a plan to do the work, or an offer to begin. Hanging up is not cancellation.
 '''
+
+RULES+='\n'+__import__('alli_personality').RULES+'\nFor group_notes context, produce clear notes and action_items from the quoted discussion only. Attribute an item only when the conversation explicitly states who owns it; otherwise use an empty assignee. Do not infer speakers from the mixed audio or invent a deadline. In alli_offer, offer specific work you can genuinely do (research, planning, drafting, analysis, files), or an empty string. Never start the listed work or contact recipients: the application handles requested per-person delivery. For ordinary jobs, action_items is an empty array.'
+RULES+='\nOnly an internal call_recovery_sid review returns pending_assignments; otherwise it is an empty array. Resolve relative dates from context.requested_at when present. Original caller speech is delegation evidence; the review does not grant additional account authority.'
+RULES+='\nUse latest_clarification_at for relative dates in a new clarification. When owner_call_unverified is true, do not loop asking for approval to access private accounts. Finish independent public work and state that John should text the private assignment from his verified texting session.'
 
 class Waiting(Exception):
     def __init__(self,approval):self.approval=approval
@@ -102,7 +111,7 @@ class WorkCancelled(Exception):pass
 
 def recent_context(phone):
     history=jobs.listing(phone)[:5]
-    return dict(preferences=jobs.preferences(phone),prior_work=[{k:j[k] for k in ('id','title','state','result')} for j in history])
+    return dict(preferences=jobs.preferences(phone),prior_work=[dict(id=j['id'],title=j['title'],state=j['state'],result=j['result'][:3000]) for j in history])
 
 def bound_listing(phone):
     rows=jobs.listing(phone)
@@ -114,16 +123,20 @@ def bound_listing(phone):
         if internal.get('approval',{}):row['question']=internal['approval'].get('question','')
     return dict(ok=True,work=rows[:20])
 
-def resume(wid,phone,answer,*,john=False):
+def resume(wid,phone,answer,*,john=False,source_text=None):
     answer=jobs.clean(answer,6000)
     with store.connection() as db:
-        row=db.execute('SELECT phone,state,approval FROM alli_work WHERE id=%s FOR UPDATE',(wid,)).fetchone()
+        row=db.execute('SELECT phone,state,approval,context FROM alli_work WHERE id=%s FOR UPDATE',(wid,)).fetchone()
         if not row or (row[0]!=phone and not john):raise ValueError('Work not found for this person')
         approval=row[2] or {}
         if row[1] not in ('waiting','needs_john') or approval.get('kind')!='clarification':raise ValueError('This work is not waiting for information')
         if approval.get('ask_john') and not john:raise ValueError('John needs to supply this answer')
         approval.update(decision='reply',answer=answer)
-        db.execute("UPDATE alli_work SET approval=%s,state='queued',updated_at=now() WHERE id=%s",(Jsonb(approval),wid))
+        context=dict(row[3] or {})
+        supplied=source_text if source_text is not None else answer
+        context['delegation_source']=(context.get('delegation_source','')+'\nVerified sender clarification: '+supplied)[-60000:]
+        context['latest_clarification_at']=datetime.now(__import__('zoneinfo').ZoneInfo('America/New_York')).isoformat()
+        db.execute("UPDATE alli_work SET approval=%s,context=%s,state='queued',updated_at=now() WHERE id=%s",(Jsonb(approval),Jsonb(context),wid))
         jobs.event(db,wid,'information_received',dict(from_john=john))
     return dict(ok=True,work_id=wid,state='queued')
 
@@ -136,14 +149,18 @@ def decision(wid,approve):
         jobs.event(db,wid,'action_approved' if approve else 'action_denied',dict(tool=approval['arguments'].get('tool_name')))
     return dict(ok=True,work_id=wid,state='queued')
 
-def phone_tools(phone,name,sid,*,owner_scope=False,source_request=''):
+def phone_tools(phone,name,sid,*,owner_scope=False,source_request='',include_history=True,shared_group=False,source_reader=None,origin=None):
     authorized_owner=bool(owner_scope and jobs.owner(phone))
     @function_tool()
     async def start_cloud_work(title:str,instruction:str) -> dict:
         """Start real cloud research/writing/analysis/document work requested by this caller/texter. Supply the outcome and their relevant context, not a fixed script. Returns queued, never completed. Results go only to this bound sender; no phone argument can redirect them."""
         try:
-            context=await asyncio.to_thread(recent_context,phone)
-            if authorized_owner and source_request:context['delegation_source']=source_request[-12000:]
+            context=await asyncio.to_thread(recent_context,phone) if include_history else {}
+            if shared_group:context['group_delegation']=True
+            context['source_sid']=sid.split(':')[0]
+            if origin:context['origin']=origin
+            original=source_reader() if source_reader else source_request
+            if original:context['delegation_source']=original[-40000:]
             return await asyncio.to_thread(jobs.create,phone,name,title,instruction,sid,owner_scope=authorized_owner,context=context)
         except ValueError as exc:return dict(ok=False,error=str(exc))
     @function_tool()
@@ -153,7 +170,7 @@ def phone_tools(phone,name,sid,*,owner_scope=False,source_request=''):
     @function_tool()
     async def continue_cloud_work(work_id:str,answer:str) -> dict:
         """Supply this person's answer/correction to their existing waiting cloud work. Does not approve account actions or John's decisions. Use the ID from get_my_work."""
-        try:return await asyncio.to_thread(resume,work_id.upper(),phone,answer,john=authorized_owner)
+        try:return await asyncio.to_thread(resume,work_id.upper(),phone,answer,john=authorized_owner,source_text=source_reader() if source_reader else source_request or answer)
         except ValueError as exc:return dict(ok=False,error=str(exc))
     @function_tool()
     async def cancel_cloud_work(work_id:str) -> dict:
@@ -182,8 +199,15 @@ def owner_call_tools(phone,sid):
         from outbound_profiles import OutboundCall
         target=store.normalize_phone(phone_number)
         if not target:return dict(ok=False,error='Resolve a valid recipient phone before calling')
+        import phonenumbers,security_controls as security
+        parsed=phonenumbers.parse(target,None)
+        toll_free=parsed.country_code==1 and phonenumbers.number_type(parsed)==phonenumbers.PhoneNumberType.TOLL_FREE
+        if (phonenumbers.region_code_for_number(parsed) not in ('US','CA') and not toll_free) or phonenumbers.number_type(parsed) in (phonenumbers.PhoneNumberType.PREMIUM_RATE,phonenumbers.PhoneNumberType.SHARED_COST):
+            return dict(ok=False,error='Phone-originated calling is limited to ordinary US/Canada numbers')
+        if security.blocked(target):return dict(ok=False,error='This recipient is suspended')
         rid='owner-sms:'+hashlib.sha256((sid+'|'+target+'|'+mission).encode()).hexdigest()[:40]
         body=OutboundCall(request_id=rid,phone=target,recipient_name=recipient_name,mission=mission)
+        await asyncio.to_thread(security.reserve,'outbound_voice',phone,rid)
         try:return await call_executor.initiate(body)
         except Exception:return dict(ok=False,request_id=rid,error='Call failed or is uncertain. Read its existing result; do not retry under another ID.')
     @function_tool()
@@ -205,6 +229,9 @@ def functions(job):
     if job['scope']=='owner':
         result += [schema('lookup_calendar','Read John’s live calendar for an owner-requested preparation task.',dict(query=dict(type='string')),('query',))]
     else:
+        from friend_work import schemas,private_allowed
+        result += schemas(schema,job)
+        if not private_allowed(job):return result
         result += [schema('find_my_meetings','Read only this saved contact’s own live meetings for preparation or directions. No other event details.',
           dict(start_datetime=dict(type='string'),end_datetime=dict(type='string')),('start_datetime','end_datetime'))]
     return result
@@ -212,13 +239,17 @@ def functions(job):
 def find_tools(query,scope='owner'):
     if runtime.state!='connected':return dict(ok=False,error='Cloud account not connected. John can connect it from Tools in his dashboard.')
     terms=query.lower().split()
-    permitted=[t for t in runtime.tools.values() if scope=='owner' or (t['name'] in PUBLIC_TOOLS and (t.get('annotations') or {}).get('readOnlyHint') is True)]
+    import phone_tool_policy as policy
+    permitted=[t for t in runtime.tools.values() if (scope=='owner' and policy.allowed(t['name'])) or (t['name'] in PUBLIC_TOOLS and (t.get('annotations') or {}).get('readOnlyHint') is True)]
     choices=sorted(permitted,key=lambda t:sum(w in (t['name']+' '+t.get('description','')).lower() for w in terms),reverse=True)
     matches=[t for t in choices if any(w in (t['name']+' '+t.get('description','')).lower() for w in terms)][:8]
     return dict(ok=True,tools=[dict(name=t['name'],description=t.get('description',''),input_schema=t['inputSchema'],read_only=(t.get('annotations') or {}).get('readOnlyHint',False)) for t in matches])
 
 async def delegated_authority(job,tool,arguments,client):
     if client is None:return dict(allowed=False,reason='This action needs an authorization check')
+    import security_controls as security
+    ref='authority:'+job['id']+':'+hashlib.sha256(json.dumps([tool['name'],arguments],sort_keys=True).encode()).hexdigest()
+    await asyncio.to_thread(security.model,job.get('phone') or os.environ['ALLI_OWNER_PHONE'],ref,6000)
     response=await client.responses.create(model=MODEL,reasoning=dict(REASONING),store=False,max_output_tokens=6000,
       instructions='''Evaluate one proposed account action against the original delegated assignment.
 You are an authorization checker, not the executing assistant. The requester's
@@ -244,6 +275,7 @@ Return a short concrete reason. No other actions or tools are available.''',
         tool_name=tool['name'],tool_instructions=tool.get('description',''),proposed_arguments=arguments)),
       text=dict(format=dict(type='json_schema',name='delegated_authority',strict=True,schema=dict(type='object',
         properties=dict(allowed=dict(type='boolean'),reason=dict(type='string')),required=['allowed','reason'],additionalProperties=False))))
+    await asyncio.to_thread(security.settle_model,ref,getattr(response.usage,'output_tokens',None) if getattr(response,'usage',None) else None)
     value=json.loads(response.output_text)
     if type(value.get('allowed')) is not bool:raise ValueError('Could not establish authority for this action')
     return value
@@ -259,14 +291,18 @@ async def execute(job,call,client=None):
         if approval.get('call_id')==call.call_id and approval.get('decision')=='reply':return dict(ok=True,answer=approval['answer'],from_john=approval.get('ask_john',False))
         raise Waiting(dict(kind='clarification',call_id=call.call_id,question=jobs.clean(args['question'],1500),ask_john=bool(args.get('ask_john')),arguments=args))
     if call.name=='find_connected_tools':return find_tools(args.get('query',''),job['scope'])
+    if job['scope']=='friend' and call.name in __import__('friend_work').NAMES:
+        return await __import__('friend_work').execute(job,call,args,client)
     if call.name=='find_my_meetings' and job['scope']=='friend':
+        if not __import__('friend_work').private_allowed(job):raise ValueError('Private meeting history is unavailable from this call')
         from contact_concierge import trusted_contact
-        from call_actions import events_in_window,associated
+        from call_actions import events_in_window
+        from contact_events import belongs
         context=await asyncio.to_thread(store.context_for,job['phone']);contact=context.get('contact') or {}
         if not trusted_contact(context,job['phone'],'sms') or not contact.get('name'):
             return dict(ok=False,error='A saved name and approved phone are required for personal meeting lookup')
         events=await asyncio.to_thread(events_in_window,args['start_datetime'],args['end_datetime'])
-        return dict(ok=True,meetings=[{k:e.get(k) for k in ('id','summary','start','end','location')} for e in events if e.get('status')=='confirmed' and associated(e,contact['name'],contact.get('email',''))])
+        return dict(ok=True,meetings=[{k:e.get(k) for k in ('id','summary','start','end','location')} for e in events if e.get('status')=='confirmed' and belongs(e,job['phone'],contact.get('email',''))])
     if job['scope']!='owner' and not (call.name=='run_connected_tool' and args.get('tool_name') in PUBLIC_TOOLS and (runtime.tools.get(args.get('tool_name'),{}).get('annotations') or {}).get('readOnlyHint') is True):
         raise ValueError('Account tools are unavailable to friend jobs')
     if call.name=='lookup_calendar':
@@ -275,8 +311,16 @@ async def execute(job,call,client=None):
     if call.name!='run_connected_tool':raise ValueError('Unavailable work tool')
     tool=runtime.tools.get(args['tool_name'])
     if not tool:raise ValueError('This tool is not connected')
+    import phone_tool_policy as policy
     arguments=json.loads(args['arguments_json'])
     if not isinstance(arguments,dict):raise ValueError('Tool arguments must be an object')
+    if job['scope']=='owner':await asyncio.to_thread(policy.validate,args['tool_name'],arguments,job)
+    if job['scope']=='owner' and args['tool_name'] in policy.WRITE:
+        import security_controls as security
+        await asyncio.to_thread(security.reserve,'account_write',job['phone'],job['id']+':'+call.call_id)
+        if args['tool_name']=='gmail.send_email':await asyncio.to_thread(security.reserve,'email_send',job['phone'],job['id']+':'+call.call_id)
+        if args['tool_name'] in ('google_calendar.create_event','google_calendar.update_event','google_calendar.delete_event'):
+            await asyncio.to_thread(security.calendar_write,job['phone'],job['id']+':'+call.call_id)
     if not (tool.get('annotations') or {}).get('readOnlyHint',False) and not accepted:
         authority=await delegated_authority(job,tool,arguments,client)
         if not authority['allowed']:
@@ -289,9 +333,9 @@ async def execute(job,call,client=None):
             if previous[0]=='tool_result':return previous[1]['result']
             raise ValueError('An earlier tool attempt is uncertain; review its provider receipt')
         jobs.event(db,job['id'],'tool_attempt',dict(call_id=call.call_id,tool=args['tool_name']))
-    result=await runtime.invoke(args['tool_name'],arguments)
+    result=await runtime.invoke(args['tool_name'],arguments,job=job)
     encoded=json.dumps(result,default=str)
-    if len(encoded)>150000:result=dict(ok=True,truncated=True,content=encoded[:150000],note='Narrow the query; this is a bounded result')
+    if len(encoded)>30000:result=dict(ok=True,truncated=True,content=encoded[:30000],note='Narrow the query; this is a bounded result')
     with store.connection() as db:jobs.event(db,job['id'],'tool_result',dict(call_id=call.call_id,result=result))
     def uncertain(value):
         if isinstance(value,dict):return value.get('status')=='uncertain' or any(uncertain(v) for v in value.values())
@@ -344,16 +388,22 @@ async def run_job(job,client=None):
     from openai import AsyncOpenAI
     from cloud_skills import attachment
     api=client or AsyncOpenAI(timeout=120,max_retries=0)
+    import security_controls as security
+    if await asyncio.to_thread(security.blocked,job['phone']):raise WorkCancelled()
     try:
-        mounted=await attachment(api)
-        tools=[dict(type='web_search'),dict(type='shell',environment=dict(type='container_auto',skills=[mounted])),*functions(job)]
+        max_output=8192 if job.get('internal') else 16000
+        if job.get('internal'):tools=[]
+        else:
+            mounted=await attachment(api)
+            tools=[dict(type='web_search'),dict(type='shell',environment=dict(type='container_auto',skills=[mounted])),*functions(job)]
         if job['response_id']:response=await api.responses.retrieve(job['response_id'])
         else:
+            await asyncio.to_thread(security.model,job['phone'],'work:'+job['id']+':start',max_output)
             response=await api.responses.create(model=MODEL,reasoning=dict(REASONING),instructions=RULES,
               input=json.dumps(dict(request=job['instruction'],requester=job['contact_name'],authority=job['scope'],
                 current_eastern_datetime=datetime.now(__import__('zoneinfo').ZoneInfo('America/New_York')).isoformat(),
                 context=job.get('context',{})),ensure_ascii=False),tools=tools,parallel_tool_calls=False,
-              background=True,max_output_tokens=16000,max_tool_calls=12,
+              background=True,max_output_tokens=max_output,max_tool_calls=12,
               text=dict(format=FINAL_FORMAT),
               extra_headers={'Idempotency-Key':'alli-work:'+job['id']+':start'})
             await asyncio.to_thread(jobs.update,job['id'],response_id=response.id)
@@ -364,6 +414,12 @@ async def run_job(job,client=None):
                 all_files.extend(f for f in details['files'] if f not in all_files)
         for step in range(12):
             response=await wait_response(api,response,job['id'])
+            current=await asyncio.to_thread(jobs.read,job['id'])
+            if not current or current['state']=='cancelled':raise WorkCancelled()
+            # Each response records actual usage; a pending reservation remains
+            # conservative if execution is interrupted before settlement.
+            if getattr(response,'usage',None):
+                await asyncio.to_thread(security.settle_work,job['id'],response.usage.output_tokens)
             if response.status!='completed':raise ValueError('Provider did not complete this work; no result was sent')
             sources,files=output_details(response);all_sources.extend(s for s in sources if s not in all_sources);all_files.extend(f for f in files if f not in all_files)
             with store.connection() as db:jobs.event(db,job['id'],'provider_output',dict(response_id=response.id,sources=sources,files=files))
@@ -378,6 +434,9 @@ async def run_job(job,client=None):
                 final=final_output(response)
                 result=final['result'].strip();outcome=final['outcome']
                 if not result or outcome not in ('completed','partial','blocked'):raise ValueError('No verified final work result was produced')
+                if job.get('internal') and (job.get('context') or {}).get('call_recovery_sid'):
+                    followups=await asyncio.to_thread(__import__('call_followthrough').queue_assignments,job,final.get('pending_assignments',[]))
+                    if followups:result+='\nSaved follow-up jobs: '+', '.join(f['work_id'] for f in followups)
                 artifacts=[]
                 for f in all_files[:6]:
                     key=f['container_id']+':'+f['file_id']
@@ -385,6 +444,8 @@ async def run_job(job,client=None):
                         content=await api.containers.files.content.retrieve(f['file_id'],container_id=f['container_id'])
                         await asyncio.to_thread(jobs.cache_file,job['id'],key,f['filename'],content.content)
                 await asyncio.to_thread(jobs.finish,job['id'],result,all_sources,artifacts,outcome=outcome)
+                if (job.get('context') or {}).get('group_notes'):
+                    await asyncio.to_thread(__import__('conference_notes').complete,job['id'],final.get('action_items',[]))
                 return
             outputs=[]
             for call in calls:
@@ -397,9 +458,10 @@ async def run_job(job,client=None):
                 outputs.append(dict(type='function_call_output',call_id=call.call_id,output=json.dumps(result,default=str)))
             latest=await asyncio.to_thread(jobs.read,job['id'])
             if not latest or latest['state']=='cancelled':raise WorkCancelled()
+            await asyncio.to_thread(security.model,job['phone'],'work:'+job['id']+':'+response.id,max_output)
             response=await api.responses.create(model=MODEL,reasoning=dict(REASONING),instructions=RULES,
               previous_response_id=response.id,input=outputs,tools=tools,parallel_tool_calls=False,
-              background=True,max_output_tokens=16000,max_tool_calls=12,
+              background=True,max_output_tokens=max_output,max_tool_calls=12,
               text=dict(format=FINAL_FORMAT),
               extra_headers={'Idempotency-Key':'alli-work:'+job['id']+':'+response.id})
             await asyncio.to_thread(jobs.update,job['id'],response_id=response.id,approval=None)
@@ -422,8 +484,15 @@ def notify_waiting(job,approval,state):
 class WorkWorker:
     def __init__(self):self.ready=False;self.task=None;self.runtime_task=None
     async def process_one(self):
+        await asyncio.to_thread(__import__('conference_notes').recover)
+        await asyncio.to_thread(__import__('call_followthrough').recover)
         job=await asyncio.to_thread(jobs.claim)
         if not job:return False
+        async def keep_lease():
+            while True:
+                await asyncio.sleep(10)
+                await asyncio.to_thread(jobs.heartbeat,job['id'])
+        heartbeat=asyncio.create_task(keep_lease())
         try:await run_job(job)
         except WorkCancelled:return True
         except asyncio.CancelledError:
@@ -438,6 +507,9 @@ class WorkWorker:
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(jobs.finish,job['id'],'I could not complete this request yet. '+message+\
                   '\nYour request and provider receipts are saved. John can review the Work tab; no uncertain account action was retried.',[],[],outcome='blocked')
+        finally:
+            heartbeat.cancel()
+            with contextlib.suppress(asyncio.CancelledError):await heartbeat
         return True
     async def run(self):
         while True:
@@ -450,12 +522,12 @@ class WorkWorker:
         @asynccontextmanager
         async def lifespan(app):
             await asyncio.to_thread(store.initialize)
-            self.ready=True;self.task=asyncio.create_task(self.run());self.runtime_task=asyncio.create_task(runtime.start())
+            self.ready=True;self.task=asyncio.create_task(self.run());self.other_tasks=[asyncio.create_task(self.run()) for _ in range(2)];self.runtime_task=asyncio.create_task(runtime.start())
             try:
                 async with original(app):yield
             finally:
                 self.ready=False
-                for task in (self.task,self.runtime_task):task.cancel()
-                for task in (self.task,self.runtime_task):
+                for task in (self.task,self.runtime_task,*self.other_tasks):task.cancel()
+                for task in (self.task,self.runtime_task,*self.other_tasks):
                     with contextlib.suppress(asyncio.CancelledError):await task
         app.router.lifespan_context=lifespan

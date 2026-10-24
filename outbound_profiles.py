@@ -230,4 +230,14 @@ def session_for(body: OutboundCall, base_session, outcome_tool, executable_tools
             'tool_choice': 'auto',
         },
     }
+    import public_profile
+    background=public_profile.read()
+    session['delegation']['responses']['instructions']=session['instructions']+'\n'+public_profile.RULES+'\n'+__import__('alli_personality').RULES+'\n'+json.dumps(background,ensure_ascii=False)
+    session['delegation']['responses'].update(max_output_tokens=8192,parallel_tool_calls=False)
+    session['instructions']+='\n'+public_profile.RULES+'\n'+json.dumps(background,ensure_ascii=False)+'''\nBackchannel policy: Use moderate, natural listening acknowledgments.
+Interruption policy: Stop speaking and listen when interrupted; the application tracks pending work separately.
+Delegation policy:
+Backend tools: only this call's explicitly configured calendar, email and outcome tools.
+Generate <|SpawnThinking|> when a live check, action, correction or careful reasoning is needed, before asserting its result. A brief "Checking" must accompany actual delegation, not replace it.
+Do not generate <|SpawnThinking|> for a greeting, an already supplied public fact, or a still-current verified result. Never guess success while waiting.'''
     return session

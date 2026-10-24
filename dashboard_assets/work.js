@@ -15,6 +15,7 @@ function renderAlliWork(){
   if(w.delivery_status)box.append(node('p','Result text: '+w.delivery_status,'small'));
   const actions=node('div','','item-actions');
   if(w.result_url){const a=node('a','Open finished work ↗','quiet');a.href=w.result_url;a.target='_blank';a.rel='noreferrer noopener';actions.append(a);}
+  if(w.result&&!w.link_revoked)actions.append(button('Revoke recipient link',async()=>{await api('work/'+w.id,{action:'revoke_link'});await loadAlliWork();}));
   if(w.approval&&['needs_john','waiting'].includes(w.state)){
    box.append(node('p',w.approval.question));
    if(w.approval.kind==='tool'){
@@ -27,7 +28,7 @@ function renderAlliWork(){
  }
  if(!workData.work.length)empty(target,'No delegated work yet. Friends can call or text Alli with something to research, write or create.');
  const r=workData.runtime;
- $('runtime-status').textContent=r.connected?'Connected · '+r.tool_count+' account tools available in the cloud.':r.error||r.status;
+ $('runtime-status').textContent=r.connected?'Connected · '+r.phone_tool_count+' phone-enabled tools · '+r.tool_count+' installed account tools.':r.error||r.status;
  $('connect-cloud').hidden=r.connected;$('refresh-cloud').disabled=['starting','waiting_for_previous_instance'].includes(r.status);
  const apps=$('cloud-apps');apps.replaceChildren();
  for(const a of r.apps){const row=node('div','','cloud-app');row.append(node('strong',a.runtimeName||a.id),badge(a.enabled&&a.callable?'Connected':'Unavailable'));apps.append(row);}

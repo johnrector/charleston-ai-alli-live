@@ -1,3 +1,6 @@
+def full_instructions(session):
+    return session['instructions']+'\n'+session.get('delegation',{}).get('responses',{}).get('instructions','')
+
 import asyncio
 from copy import deepcopy
 from types import SimpleNamespace
@@ -16,7 +19,7 @@ SMS='SM'+'b'*32
 ACCOUNT='AC'+'c'*32
 BASE={'model':'gpt-live-1','audio':{'format':{'type':'audio/pcmu'},'output':{'voice':'marin'}},
       'delegation':{'type':'responses','responses':{'model':'gpt-5.6-sol','tools':[]}}}
-CONTEXT={'mission':{'request_id':'prior','phone':CALLER,'recipient_name':'Jane Doe',
+CONTEXT={'number_verified':True,'mission':{'request_id':'prior','phone':CALLER,'recipient_name':'Jane Doe',
     'mission':'Confirm or reschedule our appointment','email':'jane@example.com',
     'capabilities':['check_calendar','manage_calendar','send_email']},'previous_outcome':{'summary':'Asked to call back'},'history':[]}
 class Memory:
@@ -71,7 +74,7 @@ def test_unknown_sender_has_no_calendar_or_email_tools():
     async def run():
         session,tools=await inbound.build_session(BASE,{},SID,CALLER,'sms',Memory())
         assert {t.name for t in tools}=={'confirm_identity','remember_contact_name','report_call_outcome'}
-        assert 'jane@example.com' not in session['instructions']
+        assert 'jane@example.com' not in full_instructions(session)
     asyncio.run(run())
 
 def test_signed_webhooks_deduplicate_and_reject_wrong_account(service):
@@ -98,7 +101,7 @@ def test_voice_isolated_sessions_and_repeat_webhook_no_second_channel(service,mo
         channel=SimpleNamespace(config=config,end_call=AsyncMock());channels.append(channel);return channel
     monkeypatch.setattr(inbound,'VoiceChannel',make)
     async def run():
-        data={'AccountSid':ACCOUNT,'To':PHONE,'From':CALLER,'CallSid':SID}
+        data={'AccountSid':ACCOUNT,'To':PHONE,'From':CALLER,'CallSid':SID,'StirVerstat':'TN-Validation-Passed-A'}
         first=await service.voice(data)
         assert first==await service.voice(data)
         assert len(channels)==1
@@ -121,6 +124,7 @@ def test_sms_send_uncertain_not_retried(service,monkeypatch):
 
 def test_sms_function_results_return_to_same_responses_conversation(service,monkeypatch):
     service.store.receive(SMS,CALLER,'sms','I am Jane Doe returning your call')
+    monkeypatch.setattr(service.store,'context_for',lambda phone:{'contact':{'name':'Jane Doe','source':'owner_saved_contact'},'history':[]})
     requests=[]
     async def create(**kwargs):
         requests.append(deepcopy(kwargs))
@@ -163,7 +167,7 @@ def test_bound_stream_rejects_other_call_and_replay():
 def test_inbound_unready_returns_503_before_claiming(service):
     service.ready=False
     with pytest.raises(Exception) as exc:
-        asyncio.run(service.voice({'AccountSid':ACCOUNT,'To':PHONE,'From':CALLER,'CallSid':SID}))
+        asyncio.run(service.voice({'AccountSid':ACCOUNT,'To':PHONE,'From':CALLER,'CallSid':SID,'StirVerstat':'TN-Validation-Passed-A'}))
     assert exc.value.status_code==503
     assert not service.store.rows
 
@@ -173,15 +177,16 @@ def test_owner_and_known_contact_greetings_keep_permissions_bounded(channel,monk
         monkeypatch.setenv('ALLI_OWNER_PHONE',CALLER)
         owner={'contact':{'name':'John Rector','source':'owner_configured','is_owner':True}}
         session,tools=await inbound.build_session(BASE,owner,SID,CALLER,channel,Memory())
-        assert "OPENING: Hi John, it's Alli. What can I help you with?" in session['instructions']
-        expected={'confirm_identity','remember_contact_name','report_call_outcome','record_promise','get_my_promises','start_cloud_work','get_my_work','continue_cloud_work','cancel_cloud_work','remember_work_preference','find_call_contact','call_person','get_requested_call'}
+        assert "OPENING: Hi John, it's Alli. What can I help you with?" in full_instructions(session)
+        expected={'check_owner_access','confirm_identity','remember_contact_name','report_call_outcome','record_promise','get_my_promises','start_cloud_work','get_my_work','continue_cloud_work','cancel_cloud_work','remember_work_preference','find_call_contact','call_person','get_requested_call'}
+        if channel=='voice':expected.update({'start_group_notes','finish_group_notes','pause_group_notes'})
         if channel=='sms':expected.update({'find_call_contact','call_person','get_requested_call','list_open_promises','answer_promise','lookup_my_calendar','find_email_recipient','send_email','save_friend_contact','create_reminder_for_john','find_text_contact','text_contact','get_text_status','cancel_scheduled_text','appointment_reminder_policy','set_appointment_reminders'})
         assert {t.name for t in tools}==expected
         assert session['model']==BASE['model']
         assert session['delegation']['responses']['model']==BASE['delegation']['responses']['model']
         monkeypatch.delenv('ALLI_OWNER_PHONE')
         session,_=await inbound.build_session(BASE,CONTEXT,SID,CALLER,channel,Memory())
-        assert "OPENING: Hi Jane, it's Alli" in session['instructions']
+        assert "OPENING: Hi Jane, it's Alli" in full_instructions(session)
     asyncio.run(run())
 
 def test_unknown_sms_keeps_history_and_name_memory_does_not_grant_identity():
@@ -191,7 +196,7 @@ def test_unknown_sms_keeps_history_and_name_memory_does_not_grant_identity():
         memory.remember_name=lambda phone,name:saved.append((phone,name)) or True
         context={'history':[{'channel':'sms','body':'My name is Jane','reply':'Hello Jane'}]}
         session,tools=await inbound.build_session(BASE,context,SID,CALLER,'sms',memory)
-        assert 'My name is Jane' in session['instructions']
+        assert 'My name is Jane' in full_instructions(session)
         registry={t.name:t for t in tools}
         result=await registry['remember_contact_name'](name='Jane')
         assert result=={'ok':True,'greeting_only':True}

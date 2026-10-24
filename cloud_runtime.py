@@ -67,6 +67,7 @@ class CloudRuntime:
     def status(self):
         return dict(status=self.state,error=self.error,version=VERSION,
           connected=self.state=='connected',apps=self.apps,tool_count=len(self.tools),
+          phone_tool_count=sum(__import__('phone_tool_policy').allowed(n) for n in self.tools),
           skill_count=len(self.skills),login=self.login)
 
     async def send(self,value):
@@ -207,8 +208,14 @@ class CloudRuntime:
         self.login={k:result[k] for k in ('loginId','userCode','verificationUrl')}
         self.state='awaiting_authorization';return self.login
 
-    async def invoke(self,name,args):
+    async def invoke(self,name,args,*,job=None):
         if self.state!='connected' or name not in self.tools:raise ValueError('This account tool is not connected')
+        if not job:raise ValueError('A saved phone delegation is required')
+        if job['scope']=='owner':await asyncio.to_thread(__import__('phone_tool_policy').validate,name,args,job)
+        else:
+            from work_agent import PUBLIC_TOOLS
+            if name not in PUBLIC_TOOLS or (self.tools[name].get('annotations') or {}).get('readOnlyHint') is not True:
+                raise ValueError('Private account tools are unavailable to friends')
         result=await self.rpc('mcpServer/tool/call',dict(server='codex_apps',threadId=self.thread,tool=name,arguments=args),timeout=180)
         await asyncio.to_thread(self.persist)
         return result

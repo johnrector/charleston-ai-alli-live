@@ -36,7 +36,7 @@ def event_path(event_id):
     return 'calendar/v3/calendars/primary/events/' + quote(event_id, safe='')
 
 
-def reschedule(event_id, name, email, start_datetime, duration_minutes):
+def reschedule(event_id, name, email, start_datetime, duration_minutes, phone=None):
     start = g.local_time(start_datetime)
     if start <= datetime.now(g.TZ) or type(duration_minutes) is not int or not 5 <= duration_minutes <= 480:
         raise ValueError('Use a future time and a duration of 5–480 minutes')
@@ -44,8 +44,14 @@ def reschedule(event_id, name, email, start_datetime, duration_minutes):
     path = event_path(event_id)
     with g.store.action_lock():
         event = g.api('GET', path)
-        if event.get('status') != 'confirmed' or not associated(event, name, email):
+        from contact_events import belongs
+        owned=belongs(event,phone,email) if phone else bool(email and associated(event,name,email))
+        if event.get('status') != 'confirmed' or not owned:
             raise ValueError('Event is not a confirmed meeting with this recipient')
+        from contact_events import require_individual_meeting
+        require_individual_meeting(event)
+        if phone and (duration_minutes>240 or start>datetime.now(g.TZ)+timedelta(days=90)):
+            raise ValueError('A contact can arrange up to 4 hours within the next 90 days. John can review other plans.')
         if 'dateTime' not in event.get('start', {}) or event.get('recurrence'):
             raise ValueError('Select a timed meeting instance, not a recurring series or all-day event')
         if not event.get('etag'):
@@ -58,18 +64,21 @@ def reschedule(event_id, name, email, start_datetime, duration_minutes):
                 'end': {'dateTime': end.isoformat(), 'timeZone': str(g.TZ)}},
                 params={'sendUpdates': 'all'}, extra_headers={'If-Match': event['etag']})
         verified = g.api('GET', path)
-        if (verified.get('status') != 'confirmed' or not associated(verified, name, email)
+        if (verified.get('status') != 'confirmed' or not (belongs(verified,phone,email) if phone else bool(email and associated(verified,name,email)))
             or g.local_time(verified['start']['dateTime']) != start or g.local_time(verified['end']['dateTime']) != end):
             raise g.GoogleError('Calendar change could not be verified')
         return {'ok': True, 'event_id': event_id, 'start': verified['start'], 'end': verified['end'], 'invitation_update_requested': True}
 
 
-def cancel(event_id, name, email):
+def cancel(event_id, name, email, phone=None):
     path = event_path(event_id)
     with g.store.action_lock():
         event = g.api('GET', path)
-        if not associated(event, name, email) or event.get('recurrence') or not event.get('etag'):
+        from contact_events import belongs
+        if not (belongs(event,phone,email) if phone else bool(email and associated(event,name,email))) or event.get('recurrence') or not event.get('etag'):
             raise ValueError('Select this recipient’s meeting instance')
+        from contact_events import require_individual_meeting
+        require_individual_meeting(event)
         if event.get('status') != 'cancelled':
             g.api('DELETE', path, params={'sendUpdates': 'all'}, extra_headers={'If-Match': event['etag']})
         try:
@@ -98,7 +107,8 @@ def tools_for_call(body):
         def run():
             matches = []
             for event in events_in_window(start_datetime, end_datetime):
-                if event.get('status') == 'confirmed' and associated(event, body.recipient_name, body.email):
+                from contact_events import belongs
+                if event.get('status') == 'confirmed' and belongs(event,getattr(body,'phone',None),body.email):
                     found.add(event['id'])
                     matches.append({k: event.get(k) for k in ('id', 'summary', 'start', 'end', 'location')})
             return {'ok': True, 'meetings': matches}
@@ -110,14 +120,18 @@ def tools_for_call(body):
         """Move a meeting returned by find_meetings after the verified recipient agrees to the exact date/time/duration. Preserves event ID, guests and other details; sends Calendar updates. Success requires ok=true and event_id."""
         if event_id not in found or not consent(identity_confirmed, confirmed):
             return {'ok': False, 'error': 'Find the matching meeting and confirm the recipient and exact new time first'}
-        return await g.safely(reschedule, event_id, body.recipient_name, body.email, start_datetime, duration_minutes)
+        import security_controls as security
+        await __import__('asyncio').to_thread(security.calendar_write,body.phone,'move:'+event_id+':'+start_datetime)
+        return await g.safely(reschedule, event_id, body.recipient_name, body.email, start_datetime, duration_minutes,body.phone)
 
     @function_tool()
     async def cancel_meeting(event_id: str, identity_confirmed: bool = False, confirmed: bool = False) -> dict:
         """Cancel this recipient's identified meeting only when the approved mission permits cancellation and the verified recipient explicitly agrees."""
         if event_id not in found or not consent(identity_confirmed, confirmed):
             return {'ok': False, 'error': 'Find and explicitly confirm the meeting cancellation first'}
-        return await g.safely(cancel, event_id, body.recipient_name, body.email)
+        import security_controls as security
+        await __import__('asyncio').to_thread(security.calendar_write,body.phone,'cancel:'+event_id)
+        return await g.safely(cancel, event_id, body.recipient_name, body.email,body.phone)
 
     @function_tool(name='create_meeting')
     async def create(start_datetime: str, duration_minutes: int, title: str, recipient_email_address: str,
@@ -127,7 +141,12 @@ def tools_for_call(body):
             return {'ok': False, 'error': 'Verify identity and agreement to exact meeting details and invitation email'}
         try: email = recipient_email(recipient_email_address)
         except ValueError as exc: return {'ok': False, 'error': str(exc)}
-        return await g.create_meeting(attendee_name=body.recipient_name, attendee_email=email, start_datetime=start_datetime, duration_minutes=duration_minutes, title=title, context=body.approved_logistics, confirmed=True)
+        import security_controls as security
+        from contact_events import bind
+        await __import__('asyncio').to_thread(security.calendar_write,body.phone,'book:'+email+':'+start_datetime)
+        result=await g.create_meeting(attendee_name=body.recipient_name,attendee_email=email,start_datetime=start_datetime,duration_minutes=duration_minutes,title=title,context=body.approved_logistics,confirmed=True,contact_phone=body.phone)
+        if result.get('ok') and result.get('event_id'):await __import__('asyncio').to_thread(bind,body.phone,result['event_id'])
+        return result
 
     @function_tool(name='send_email')
     async def send(recipient_email_address: str, subject: str, message: str,

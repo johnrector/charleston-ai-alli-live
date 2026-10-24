@@ -32,6 +32,13 @@ def initialize():
                 PRIMARY KEY(phone,request_id))''')
             db.execute('''CREATE TABLE IF NOT EXISTS alli_contact_name (phone text PRIMARY KEY, name text NOT NULL, source text NOT NULL, updated_at timestamptz NOT NULL DEFAULT now())''')
             db.execute("ALTER TABLE alli_contact_name ADD COLUMN IF NOT EXISTS email text NOT NULL DEFAULT ''")
+            db.execute('ALTER TABLE alli_contact_name ADD COLUMN IF NOT EXISTS deleted_at timestamptz')
+            from security_controls import initialize as initialize_security
+            initialize_security(db)
+            from owner_access import initialize as initialize_owner_access
+            initialize_owner_access(db)
+            from contact_events import initialize as initialize_contact_events
+            initialize_contact_events(db)
             from contact_approvals import initialize as initialize_approvals
             initialize_approvals(db)
             from scheduled_sms import initialize as initialize_sms
@@ -42,10 +49,18 @@ def initialize():
             initialize_promises(db)
             from dashboard import initialize as initialize_dashboard
             initialize_dashboard(db)
+            from owner_access import reuse_dashboard_proof
+            reuse_dashboard_proof(db)
             from work_store import initialize as initialize_work
             initialize_work(db)
             from cloud_runtime import initialize as initialize_runtime
             initialize_runtime(db)
+            from public_profile import initialize as initialize_profile
+            initialize_profile(db)
+            from conference_notes import initialize as initialize_group_notes
+            initialize_group_notes(db)
+            from call_followthrough import initialize as initialize_call_followthrough
+            initialize_call_followthrough(db)
             # Preserve owner-supplied contacts independently of mission expiry. Shared
             # numbers with conflicting names are deliberately not auto-approved.
             db.execute(r"""INSERT INTO alli_contact_name(phone,name,source,email)
@@ -98,6 +113,28 @@ def remember_name(phone, name):
                 OR (alli_contact_name.source IN ('apple_favorite','owner_saved_contact') AND alli_contact_name.name='')""",(phone,name))
     return True
 
+def history_window(records,budget=16000):
+    """Bound prompt history; the complete originals remain in Postgres."""
+    import json
+    kept=[]
+    for row in reversed(records):
+        row=dict(row)
+        for key in ('body','reply'):
+            if isinstance(row.get(key),str):row[key]=row[key][-2500:]
+        if row.get('transcript'):
+            parts=row.pop('transcript');lines=[];role=None
+            for part in parts:
+                if part.get('role')!=role:role=part.get('role');lines.append('\n'+str(role)+': ')
+                lines.append(part.get('text',''))
+            text=''.join(lines);row['transcript_excerpt']=('[Earlier transcript omitted]\n' if len(text)>6000 else '')+text[-6000:]
+        if row.get('report'):
+            text=json.dumps(row['report'],ensure_ascii=False,default=str)
+            if len(text)>3000:row['report']={'excerpt':text[-3000:]}
+        size=len(json.dumps(row,ensure_ascii=False,default=str))
+        if size>budget:break
+        kept.append(row);budget-=size
+    return list(reversed(kept))
+
 def context_for(phone):
     initialize()
     phone=normalize_phone(phone)
@@ -111,24 +148,26 @@ def context_for(phone):
             WHERE context->>'phone'=%s AND status<>'blocked' ORDER BY created_at DESC""",(phone,)).fetchall()
         names = {r[0].get('recipient_name','').strip().casefold() for r in greeting_rows}
         matched = rows[0][0] if rows and len(names)==1 and not owner else None
-        contact=db.execute('SELECT name,source,email FROM alli_contact_name WHERE phone=%s',(phone,)).fetchone()
+        contact=db.execute('SELECT name,source,email,deleted_at FROM alli_contact_name WHERE phone=%s',(phone,)).fetchone()
+        deleted=bool(contact and contact[3])
         if owner:contact=('John Rector','owner_configured')
         elif contact and contact[1] in ('owner_saved_contact','apple_favorite'):pass
         elif len(names)>1:contact=None
         elif greeting_rows and len(names)==1:
             contact=(greeting_rows[0][0]['recipient_name'],'owner_supplied_mission',greeting_rows[0][0].get('email',''))
+        if deleted:contact=None;matched=None
         history = db.execute("""SELECT channel,body,reply,report,transcript FROM (
             SELECT channel,body,reply,report,transcript,created_at FROM alli_inbound
-                WHERE phone=%s AND created_at>now()-interval '7 days'
+                WHERE phone=%s AND created_at>now()-interval '7 days' AND (NOT %s OR owner_verified)
             UNION ALL
             SELECT 'sms','',body,NULL::jsonb,NULL::jsonb,send_at FROM alli_outbound_sms
-                WHERE phone=%s AND send_at>now()-interval '7 days' AND request_id NOT LIKE 'dashboard-login:%%'
+                WHERE phone=%s AND send_at>now()-interval '7 days' AND request_id NOT LIKE 'dashboard-login:%%' AND request_id NOT LIKE 'owner-auth:%%'
                 AND status IN ('submitted','queued','sent','delivered')
-            ) recent ORDER BY created_at DESC LIMIT 12""", (phone,phone)).fetchall()
+            ) recent ORDER BY created_at DESC LIMIT 12""", (phone,owner,phone)).fetchall()
     return {'mission':matched, 'previous_outcome': rows[0][1] if matched else None,
             'contact':dict(name=contact[0],source=contact[1],is_owner=owner,
                 email=contact[2] if len(contact)>2 else '') if contact else None,
-            'history':[dict(zip(('channel','body','reply','report','transcript'), r)) for r in reversed(history)]}
+            'history':history_window([dict(zip(('channel','body','reply','report','transcript'), r)) for r in reversed(history)])}
 
 def save_contact(phone, name, email=''):
     """Owner-only callers of this function maintain the standing SMS directory."""
@@ -144,6 +183,7 @@ def save_contact(phone, name, email=''):
         db.execute("""INSERT INTO alli_contact_name(phone,name,source,email)
             VALUES(%s,%s,'owner_saved_contact',%s) ON CONFLICT(phone) DO UPDATE SET
             name=EXCLUDED.name,source=EXCLUDED.source,email=EXCLUDED.email,updated_at=now()""",(phone,name,email))
+        db.execute("UPDATE alli_contact_approval SET decision='approved',updated_at=now() WHERE phone=%s AND decision='pending'",(phone,))
     return {'ok':True,'phone':phone,'name':name,'email':email}
 
 def import_apple_favorites(entries):
@@ -197,6 +237,9 @@ def get(sid):
     with connection() as db:
         row = db.execute('SELECT sid,phone,channel,status,body,context,reply,report FROM alli_inbound WHERE sid=%s',(sid,)).fetchone()
     return dict(zip(('sid','phone','channel','status','body','context','reply','report'),row)) if row else None
+
+def checkpoint_transcript(sid,fragments):
+    with connection() as db:db.execute("UPDATE alli_inbound SET transcript=%s,updated_at=now() WHERE sid=%s AND status='active'",(Jsonb(fragments),sid))
 
 def claim_sms():
     initialize()

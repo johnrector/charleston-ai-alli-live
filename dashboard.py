@@ -67,6 +67,8 @@ def verify_code(challenge,code):
                 db.execute('UPDATE alli_dashboard_login SET consumed=true WHERE id=%s',(challenge,))
                 db.execute('DELETE FROM alli_dashboard_session WHERE expires_at<now()')
                 db.execute("INSERT INTO alli_dashboard_session(digest,expires_at) VALUES(%s,now()+interval '12 hours')",(digest(token),))
+                from owner_access import grant_sms
+                grant_sms(db)
     # Raise after the transaction commits, so invalid-attempt counters persist.
     if not valid: raise ValueError('Code invalid, expired or already used. Request a new code if needed.')
     return token
@@ -124,7 +126,17 @@ class Policy(Input):
 def data():
     store.initialize()
     with store.connection() as db, db.cursor(row_factory=dict_row) as cur:
-        cur.execute('SELECT phone,name,source,email,updated_at FROM alli_contact_name ORDER BY lower(name),phone')
+        cur.execute('''WITH contacts AS (
+          SELECT phone,created_at AS contacted_at,'inbound' AS channel FROM alli_inbound
+          UNION ALL SELECT phone,send_at,'outbound_sms' FROM alli_outbound_sms
+            WHERE send_at<=now() AND status IN ('submitted','sent','delivered','undelivered','failed')
+              AND request_id NOT LIKE 'dashboard-login:%%' AND request_id NOT LIKE 'owner-auth:%%'
+          UNION ALL SELECT context->>'phone',created_at,'outbound_call' FROM alli_appointment_dispatch WHERE call_sid IS NOT NULL
+        ), activity AS (SELECT phone,max(contacted_at) AS last_activity,count(*) AS conversation_count FROM contacts GROUP BY phone)
+        SELECT c.phone,c.name,c.source,c.email,c.updated_at,c.deleted_at,a.last_activity,coalesce(a.conversation_count,0) AS conversation_count,
+          (SELECT count(*) FROM alli_work w WHERE w.phone=c.phone AND NOT w.internal) AS work_count
+        FROM alli_contact_name c LEFT JOIN activity a ON a.phone=c.phone
+        ORDER BY a.last_activity DESC NULLS LAST,lower(c.name),c.phone''')
         people=[promises.serial(row) for row in cur.fetchall()]
         cur.execute("SELECT a.phone,a.code,a.created_at,c.name FROM alli_contact_approval a LEFT JOIN alli_contact_name c ON c.phone=a.phone WHERE a.decision='pending' ORDER BY a.created_at")
         approvals=[promises.serial(row) for row in cur.fetchall()]
@@ -142,7 +154,7 @@ def data():
         attention=[promises.serial(row) for row in cur.fetchall()]
         cur.execute('SELECT id,payload,created_at FROM alli_communication_update ORDER BY id DESC LIMIT 30')
         activity=[promises.serial(row) for row in cur.fetchall()]
-        cur.execute(f'SELECT {sms.FIELDS} FROM alli_outbound_sms WHERE send_at>now()-interval \'1 day\' AND request_id NOT LIKE \'dashboard-login:%%\' ORDER BY send_at DESC LIMIT 60')
+        cur.execute(f'SELECT {sms.FIELDS} FROM alli_outbound_sms WHERE send_at>now()-interval \'1 day\' AND request_id NOT LIKE \'dashboard-login:%%\' AND request_id NOT LIKE \'owner-auth:%%\' ORDER BY send_at DESC LIMIT 60')
         outbound=[]
         for row in cur.fetchall():
             row=dict(row); row.pop('error_code',None)
@@ -156,6 +168,8 @@ def data():
 
 
 def install_dashboard(app,communications,reminders,worker):
+    from admin_activity import install as install_admin_activity
+    install_admin_activity(app)
     @app.middleware('http')
     async def private_headers(request,call_next):
         response=await call_next(request)
@@ -169,7 +183,7 @@ def install_dashboard(app,communications,reminders,worker):
     async def page(): return FileResponse(STATIC/'index.html')
     @app.get('/dashboard/assets/{filename}',include_in_schema=False)
     async def assets(filename:str):
-        if filename not in ('dashboard.js','dashboard.css','alli-portrait.png','alli-welcome.mp4','work.js'): raise HTTPException(404)
+        if filename not in ('dashboard.js','dashboard.css','alli-portrait.png','alli-welcome.mp4','work.js','admin.js'): raise HTTPException(404)
         return FileResponse(STATIC/filename)
     @app.post('/dashboard/api/login')
     async def login():

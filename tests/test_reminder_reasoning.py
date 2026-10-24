@@ -10,7 +10,7 @@ def test_return_visit_context_uses_high_flagship_and_saves_reasoned_question(mon
     monkeypatch.setattr(r,'context_for',lambda _:context)
     create=AsyncMock(return_value=SimpleNamespace(output_text=json.dumps({'question':"What would you like John to focus on in this session?"})))
     client=SimpleNamespace(responses=SimpleNamespace(create=create))
-    result=asyncio.run(r.draft_followup(dict(message='Facts. Reply here if anything changes.'),client))
+    result=asyncio.run(r.draft_followup(dict(phone='+18435550100',message='Facts. Reply here if anything changes.'),client))
     assert result['mode']=='contextual' and 'focus on' in result['message'] and 'directions' not in result['message']
     assert create.call_args.kwargs['model']=='gpt-6.1-sol'
     assert create.call_args.kwargs['reasoning']=={'effort':'high'}

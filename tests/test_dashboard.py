@@ -1,3 +1,6 @@
+def full_instructions(session):
+    return session['instructions']+'\n'+session.get('delegation',{}).get('responses',{}).get('instructions','')
+
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime,timedelta,timezone
@@ -84,7 +87,7 @@ def test_promises_only_available_to_owner_and_saved_contacts(monkeypatch):
         assert not {'get_my_promises','record_promise'}&{t.name for t in tools}
         known,tools=await inbound.build_session(BASE,{'contact':{'name':'Jane','source':'owner_saved_contact'}},SID,CALLER,'voice',Memory())
         assert {'get_my_promises','record_promise'}<={t.name for t in tools}
-        assert 'record_promise before' in known['instructions']
+        assert 'record_promise before' in full_instructions(known)
     asyncio.run(check())
 
 def test_promise_tools_bind_phone_and_hide_owner_notes(monkeypatch):

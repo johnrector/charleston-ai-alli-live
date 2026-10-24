@@ -168,13 +168,13 @@ def availability(start_datetime, end_datetime, duration_minutes=30):
     suggestions=[]
     while cursor+timedelta(minutes=duration_minutes)<=end and len(suggestions)<12:
         finish=cursor+timedelta(minutes=duration_minutes)
-        if cursor.weekday()<5 and cursor.hour>=9 and (finish.hour<17 or (finish.hour==17 and finish.minute==0)) and cursor.date()==finish.date() and not any(cursor<b and finish>a for a,b in busy):
+        if cursor.weekday() in {int(d) for d in os.getenv('ALLI_SUGGESTED_WEEKDAYS','0,1,2,3,4,5,6').split(',')} and cursor.hour>=9 and (finish.hour<17 or (finish.hour==17 and finish.minute==0)) and cursor.date()==finish.date() and not any(cursor<b and finish>a for a,b in busy):
             suggestions.append({'start':cursor.isoformat(),'end':finish.isoformat()})
         cursor+=timedelta(minutes=15)
-    return {'ok':True,'timezone':str(TZ),'now':now.isoformat(),'window_start':start.isoformat(),'window_end':end.isoformat(),'busy':[{'start':a.isoformat(),'end':b.isoformat()} for a,b in busy],'suggested_slots':suggestions,'suggestion_policy':'Weekdays 9am–5pm Eastern; busy intervals are authoritative for the entire requested window.'}
+    return {'ok':True,'timezone':str(TZ),'now':now.isoformat(),'window_start':start.isoformat(),'window_end':end.isoformat(),'busy':[{'start':a.isoformat(),'end':b.isoformat()} for a,b in busy],'suggested_slots':suggestions,'suggestion_policy':'Preferred 9am–5pm Eastern, daily unless configured otherwise; busy intervals are authoritative for the entire requested window.'}
 
 
-def meeting(attendee_name, attendee_email, start_datetime, duration_minutes, title, context='', confirmed=False):
+def meeting(attendee_name, attendee_email, start_datetime, duration_minutes, title, context='', confirmed=False,contact_phone=''):
     if not confirmed: raise ValueError('Obtain agreement on the meeting time before creating it')
     if not isinstance(attendee_name, str) or not attendee_name.strip() or len(attendee_name) > 200 or any(ord(c) < 32 for c in attendee_name):
         raise ValueError('A nonempty attendee name of at most 200 characters is required')
@@ -188,6 +188,7 @@ def meeting(attendee_name, attendee_email, start_datetime, duration_minutes, tit
     event_id=hashlib.sha256(json.dumps([attendee_email.lower(),start.isoformat(),duration_minutes,title],ensure_ascii=True).encode()).hexdigest()
     event_path='calendar/v3/calendars/primary/events/'+event_id
     with store.action_lock() as db:
+        created=False
         existing=db.execute('SELECT result FROM alli_google_action WHERE id=%s AND status=%s',(event_id,'done')).fetchone()
         # Cached success is historical; always re-read the current event.
         # Deterministic Google event ID makes retries safe after a lost HTTP response.
@@ -197,10 +198,24 @@ def meeting(attendee_name, attendee_email, start_datetime, duration_minutes, tit
             if 'HTTP 404' not in str(e): raise
             if existing:
                 raise GoogleError('Previously booked event is missing; do not recreate it automatically') from None
+            if contact_phone:
+                import security_controls
+                if not security_controls.owner(contact_phone):
+                    if start>datetime.now(TZ)+timedelta(days=90) or duration_minutes>240:
+                        raise ValueError('John must review meetings more than 90 days ahead or longer than 4 hours')
+                    from contact_events import check_capacity
+                    check_capacity(db,contact_phone,attendee_email)
             current=availability(start.isoformat(),end.isoformat(),duration_minutes)
             if current['busy']: raise ValueError('John is busy during that time. Choose another slot.')
             payload={'id':event_id,'summary':title,'description':context,'start':{'dateTime':start.isoformat(),'timeZone':str(TZ)},'end':{'dateTime':end.isoformat(),'timeZone':str(TZ)},'attendees':[{'email':attendee_email,'displayName':attendee_name}]}
             event=api('POST','calendar/v3/calendars/primary/events',body=payload,params={'sendUpdates':'all'})
+            created=True
+        if contact_phone and not created:
+            from security_controls import owner
+            saved=db.execute('SELECT email FROM alli_contact_name WHERE phone=%s',(contact_phone,)).fetchone()
+            bound=db.execute('SELECT 1 FROM alli_contact_event WHERE phone=%s AND event_id=%s',(contact_phone,event_id)).fetchone()
+            if not owner(contact_phone) and not bound and not (saved and saved[0] and saved[0].casefold()==attendee_email.casefold()):
+                raise ValueError('An existing event is not linked to this contact; John can review it')
         try:
             attendees = event.get('attendees', [])
             matches = (
@@ -216,6 +231,7 @@ def meeting(attendee_name, attendee_email, start_datetime, duration_minutes, tit
             raise GoogleError('Calendar event is missing, changed, cancelled or declined; booking is not confirmed')
         result={'ok':True,'event_id':event['id'],'event_link':event.get('htmlLink'),'start':event['start'],'end':event['end'],'timezone':str(TZ),'invitation_requested':True,'attendee_email':attendee_email}
         db.execute("INSERT INTO alli_google_action(id,status,result) VALUES(%s,'done',%s) ON CONFLICT(id) DO UPDATE SET status='done',result=EXCLUDED.result",(event_id,Jsonb(result)))
+        if contact_phone:db.execute("INSERT INTO alli_contact_event(phone,event_id,source) VALUES(%s,%s,'verified_creation') ON CONFLICT DO NOTHING",(contact_phone,event_id))
         return result
 
 
@@ -258,9 +274,9 @@ async def check_calendar(start_datetime: str, end_datetime: str, duration_minute
 
 
 @function_tool()
-async def create_meeting(attendee_name: str, attendee_email: str, start_datetime: str, duration_minutes: int, title: str, context: str='', confirmed: bool=False) -> dict:
+async def create_meeting(attendee_name: str, attendee_email: str, start_datetime: str, duration_minutes: int, title: str, context: str='', confirmed: bool=False,contact_phone:str='') -> dict:
     """Create a real meeting and send the attendee a Calendar invitation ONLY after they agree to the time. Set confirmed only after agreement. Claim success only when ok=true with event_id."""
-    return await safely(meeting,attendee_name,attendee_email,start_datetime,duration_minutes,title,context,confirmed)
+    return await safely(meeting,attendee_name,attendee_email,start_datetime,duration_minutes,title,context,confirmed,contact_phone)
 
 
 @function_tool()
