@@ -1,31 +1,101 @@
-import asyncio
-import importlib
-from unittest.mock import AsyncMock
-from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
+
+from adapters.calls import CallRepository
+from adapters.postgres import PostgresRepository
+from alli_core.authority import Actor,Conflict,PermissionDenied
+from alli_core.profile import Profile
 
 
-def test_two_calls_keep_their_own_context(monkeypatch):
-    for key,value in {'TWILIO_ACCOUNT_SID':'AC'+'0'*32,'TWILIO_AUTH_TOKEN':'test','TWILIO_API_KEY':'SK'+'0'*32,'TWILIO_API_SECRET':'test','TWILIO_PHONE_NUMBER':'+15555550100','TWILIO_VOICE_PUBLIC_DOMAIN':'example.com','OPENAI_API_KEY':'test','DEMO_KEY':'test-admin'}.items():
-        monkeypatch.setenv(key,value)
-    app=importlib.import_module('app')
-    captured=[]
-    async def initiate(options):
-        captured.append(options)
-        await asyncio.sleep(0)
-        return SimpleNamespace(call_sid='CA-test')
-    monkeypatch.setattr(app.voice_channel,'initiate_outbound_conversation',initiate)
-    async def calls():
-        return await asyncio.gather(
-            app.demo_call(app.DemoCall(to='+15555550101',name='Susan',email='susan@example.com',mission='Sell Mount Pleasant house'),'test-admin'),
-            app.demo_call(app.DemoCall(to='+15555550102',name='Bob',email='bob@example.com',mission='Different mission'),'test-admin'))
-    assert all(r['ok'] for r in asyncio.run(calls()))
-    assert 'susan@example.com' in captured[0].session_config['instructions']
-    assert 'susan@example.com' not in captured[1].session_config['instructions']
-    assert 'bob@example.com' not in captured[0].session_config['instructions']
-    assert 'susan@example.com' not in app.SESSION_CONFIG['instructions']
-    assert 'Mount Pleasant' not in captured[1].session_config['instructions']
-    assert 'Waterway Boulevard' not in str(captured[0].session_config)
-    assert captured[0].session_config['model'] == 'gpt-live-1'
-    assert captured[0].session_config['delegation']['type'] == 'responses'
-    assert captured[0].session_config['delegation']['responses']['model'] == 'gpt-6.1-sol'
-    assert [t['name'] for t in captured[0].session_config['delegation']['responses']['tools']]==['check_calendar','create_meeting','send_email']
+@pytest.fixture
+def call_setup(database):
+    repo=PostgresRepository(database,Profile.load('profiles/alli.toml'))
+    repo.initialize()
+    owner=Actor('alli',repo.bootstrap_owner('+18435550100'),'sms',True,'owner-proof')
+    person=repo.save_person(owner,name='Test friend',phone='+18435550101')
+    repo.set_person_status(owner,str(person['id']),'approved',person['revision'])
+    task=repo.submit(owner,source_id='call-test',title='Confirm meeting',instruction='Call my friend and confirm the meeting')
+    return repo,owner,str(person['id']),task,CallRepository(repo,'+18435550999')
+
+
+def test_callback_can_bind_before_create_reply_across_instances(call_setup):
+    repo,_,person,task,calls=call_setup
+    call=calls.queue(task['id'],person,'Confirm the meeting','one-call')
+    assert calls.claim()['id']==call['id']
+    another=CallRepository(repo,'+18435550999')
+    callback=another.bind(call['id'],'CA-test',to='+18435550101',from_='+18435550999',status='in-progress')
+    assert callback['provider_id']=='CA-test'
+    # The delayed REST create response cannot create another identity or media slot.
+    calls.bind(call['id'],'CA-test',to='+18435550101',from_='+18435550999',status='queued')
+    assert another.attach_media(call['id'],'CA-test')['id']==call['id']
+    with pytest.raises(Conflict):calls.attach_media(call['id'],'CA-test')
+    with pytest.raises(Conflict):
+        calls.bind(call['id'],'CA-other',to='+18435550101',from_='+18435550999',status='ringing')
+    with pytest.raises(PermissionDenied):
+        calls.bind(call['id'],'CA-test',to='+18435550102',from_='+18435550999',status='ringing')
+
+
+def test_call_claim_and_reworded_request_do_not_redial(call_setup):
+    repo,_,person,task,calls=call_setup
+    call=calls.queue(task['id'],person,'Confirm Friday','source1')
+    assert calls.queue(task['id'],person,'Ask about Friday instead','source2')['id']==call['id']
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        claims=list(pool.map(lambda _:CallRepository(repo,'+18435550999').claim(),range(4)))
+    assert len([claim for claim in claims if claim])==1
+    assert CallRepository(repo,'+18435550999').claim() is None
+    assert repo.task_result(task['id'])['context']['pending_calls']==[call['id']]
+
+
+def test_carrier_completion_waits_for_transcript_and_does_not_prove_answer(call_setup):
+    repo,owner,person,task,calls=call_setup
+    call=calls.queue(task['id'],person,'Confirm meeting','one-call')
+    calls.claim()
+    calls.bind(call['id'],'CA-test',to='+18435550101',from_='+18435550999',status='completed',duration=0)
+    assert calls.unreported()==[]
+    repo.save_transcript(str(call['conversation_id']),[],finalized=True)
+    assert calls.unreported()[0]['transcript']==[]
+    event=[event for event in repo.ledger(owner) if event['kind']=='call.carrier_status'][0]
+    assert event['facts']['conversation_confirmed'] is False
+    calls.reported(call['id'])
+    assert repo.task_result(task['id'])['context']['pending_calls']==[]
+    assert calls.unreported()==[]
+    # An old ringing callback cannot reverse a terminal call status.
+    late=calls.bind(call['id'],'CA-test',to='+18435550101',from_='+18435550999',status='ringing')
+    assert late['state']=='finished' and late['carrier_status']=='completed'
+
+
+def test_name_recognition_is_separate_from_owner_number_verification(call_setup):
+    repo,owner,_,_,calls=call_setup
+    form={'To':'+18435550999','From':'+18435550100','CallSid':'CA-inbound1','CallStatus':'in-progress'}
+    unverified=calls.incoming(form)
+    assert calls.get(unverified['id'])['name']=='John Rector'
+    assert calls.get(unverified['id'])['scope']=='friend'
+    trusted=calls.incoming(dict(form,CallSid='CA-inbound2',StirVerstat='TN-Validation-Passed-A'))
+    assert calls.get(trusted['id'])['scope']=='owner'
+    duplicate=calls.incoming(dict(form,CallSid='CA-inbound2',StirVerstat='TN-Validation-Passed-A'))
+    assert duplicate['id']==trusted['id']
+
+
+def test_daily_limits_and_suspension_block_new_calls(call_setup):
+    repo,owner,person,task,calls=call_setup
+    restricted=CallRepository(repo,'+18435550999',daily_per_person=1)
+    restricted.queue(task['id'],person,'First call','one')
+    task2=repo.submit(owner,source_id='second-task',title='Another call',instruction='Try another call')
+    with pytest.raises(PermissionDenied):restricted.queue(task2['id'],person,'Second call','two')
+    contact=repo.recognize('+18435550101')
+    repo.set_person_status(owner,person,'suspended',contact['revision'])
+    assert calls.claim() is None
+
+
+def test_late_real_call_outcome_recovers_an_uncertain_create_reply(call_setup):
+    repo,_,person,task,calls=call_setup
+    call=calls.queue(task['id'],person,'Confirm the meeting','lost-reply')
+    calls.claim();calls.uncertain(call['id'],'TimeoutError')
+    assert calls.unreported()[0]['state']=='uncertain'
+    calls.reported(call['id'])
+    calls.bind(call['id'],'CA-recovered',to='+18435550101',from_='+18435550999',status='in-progress')
+    repo.save_transcript(str(call['conversation_id']),[{'role':'user','text':'Yes, confirmed.'}],finalized=True)
+    calls.bind(call['id'],'CA-recovered',to='+18435550101',from_='+18435550999',status='completed',duration=30)
+    assert calls.unreported()[0]['transcript'][0]['text']=='Yes, confirmed.'
+    assert calls.claim() is None
