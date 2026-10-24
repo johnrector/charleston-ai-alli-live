@@ -196,7 +196,12 @@ async def execute(job,call,args,client):
         if meta['image'].get('url')!=media.get('source_url') or any(meta['image'].get(d)!=media.get('media_details',{}).get(d) for d in ('width','height')):raise ValueError('Use the featured media’s actual URL and dimensions')
         cats=rows(await wp(job,'categories.list',dict(include=prepared['category_ids']),client));tags=rows(await wp(job,'tags.list',dict(include=prepared['tag_ids']),client)) if prepared['tag_ids'] else []
         if meta['articleSection'] not in [c['name'] for c in cats] or sorted(meta['keywords'])!=sorted(t['name'] for t in tags):raise ValueError('Category/tag metadata must match the actual site terms')
-        with store.connection() as db:jobs.event(db,job['id'],'wordpress_preflight',prepared)
+        key='wordpress-source:'+prepared['source_hash']
+        await asyncio.to_thread(jobs.cache_file,job['id'],key,'article-'+prepared['source_hash'][:12]+'.html',prepared['source'].encode())
+        with store.connection() as db:
+            jobs.event(db,job['id'],'wordpress_preflight',prepared)
+            fid=db.execute('SELECT id FROM alli_work_file WHERE work_id=%s AND provider_key=%s',(job['id'],key)).fetchone()[0]
+        mark(job,wordpress_source_id=fid)
         return dict(ok=True,dry_run=True,source_hash=prepared['source_hash'],title=post['title'],slug=post['slug'],article_words=meta['wordCount'],next='Render exact source at desktop/320/390; cite PNG screenshots and DOM audit JSON with source_hash, phase=preflight and viewports [{width,overflow_px,split_words,clipped_headings,overlapping_headings}]. Then wordpress_publish.')
     prepared=last(job,'wordpress_preflight')
     if not prepared:raise ValueError('Run the exact-source WordPress dry run first')

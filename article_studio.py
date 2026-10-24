@@ -13,14 +13,18 @@ async def import_files(job,client):
     cid=job.get('context',{}).get('wordpress_container_id')
     if not cid:raise ValueError('This article needs its own isolated authoring container')
     listing=await client.containers.files.list(cid,limit=100)
+    current=[]
     for f in listing.data[:100]:
         path=getattr(f,'path','') or ''
         if not path.startswith('/mnt/data/') or Path(path).suffix.lower() not in {'.html','.png','.json','.jpg','.jpeg','.webp'}:continue
-        key=cid+':'+f.id
-        if await asyncio.to_thread(jobs.cached_file,job['id'],key):continue
+        if Path(path).name=='390-full.png':continue
         content=await client.containers.files.content.retrieve(f.id,container_id=cid)
+        digest=hashlib.sha256(content.content).hexdigest();key=cid+':'+f.id+':'+digest
         await asyncio.to_thread(jobs.cache_file,job['id'],key,Path(path).name,content.content)
-    return dict(files=await asyncio.to_thread(__import__('work_routes').files,job['id']))
+        with publisher.store.connection() as db:
+            row=db.execute('SELECT id FROM alli_work_file WHERE work_id=%s AND provider_key=%s',(job['id'],key)).fetchone()
+        current.append(dict(id=row[0],filename=Path(path).name,source_path=path,sha256=digest))
+    return dict(current=current,files=await asyncio.to_thread(__import__('work_routes').files,job['id']))
 
 async def execute(job,call,args,client):
     if not job.get('context',{}).get('public_article') or job['context'].get('wordpress_authoring'):raise ValueError('This is only for bound public standalone article jobs')
