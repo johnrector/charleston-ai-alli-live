@@ -79,6 +79,7 @@ async def wp(job,operation,params,client,*,key=''):
     args=dict(action='execute',operation=operation,wpcom_site=SITE,params=params)
     write=operation in {'posts.create','posts.update','media.create'}
     if write:
+        if (job.get('context') or {}).get('qa_dry_run_only'):raise ValueError('This isolated QA assignment forbids every WordPress write')
         import work_agent,security_controls as security
         check=await work_agent.delegated_authority(job,dict(name='John’s WordPress Publisher: '+operation,description='A public custom HTML article and its illustration on johnrector.me only. Requires John’s explicit publication instruction. No private email, contact details, account information or personal conversation may be disclosed.'),dict(operation=operation,site=SITE,title=params.get('title'),status=params.get('status'),article_text=(engine.article_metadata(params['content'])['articleBody'] if params.get('content') else ''),content_sha256=hashlib.sha256(str(params.get('content','')).encode()).hexdigest()),client)
         if not check['allowed']:raise ValueError(check['reason'])
