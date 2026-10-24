@@ -128,6 +128,7 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
         import conference_notes
         registry.extend(conference_notes.tools(phone,sid,session_reader,group_state,context.get('number_verified') is True or private_voice))
         public_group_work=next(t for t in phone_tools(phone,recognized or 'Group host',sid+':group',owner_scope=False,include_history=False,shared_group=True,source_reader=source_reader,origin=dict(channel=channel,number_verified=private_voice)) if t.name=='start_cloud_work')
+        public_group_article=next(t for t in phone_tools(phone,recognized or 'Group host',sid+':group',owner_scope=False,include_history=False,shared_group=True,source_reader=source_reader,origin=dict(channel=channel,number_verified=private_voice)) if t.name=='start_article_work')
     if contact_assistance:registry.append(meeting_time_tool())
     if contact_assistance or owner:
         from promises import tools as promise_tools
@@ -197,8 +198,9 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
                 if await asyncio.to_thread(__import__('security_controls').blocked,phone):return dict(ok=False,error='This contact’s access has been suspended by John',performed=False)
                 if live and live.metadata.get('budget_blocked'):return dict(ok=False,error='This call has reached its application usage ceiling',performed=False)
                 if group_state['active']:
-                    if live and live.metadata.get('suppress_transcript_persistence') and original.name=='start_cloud_work':return dict(ok=False,error='Group capture is paused. Please text this assignment privately so it can be saved without retaining the paused discussion.')
+                    if live and live.metadata.get('suppress_transcript_persistence') and original.name in {'start_cloud_work','start_article_work'}:return dict(ok=False,error='Group capture is paused. Please text this assignment privately so it can be saved without retaining the paused discussion.')
                     if original.name=='start_cloud_work':return await public_group_work(**kwargs)
+                    if original.name=='start_article_work':return await public_group_article(**kwargs)
                     if original.name not in {'check_calendar','check_meeting_time','create_meeting','create_reminder_for_john','record_promise'}:
                         return dict(ok=False,error='Private history, account tools and account actions are unavailable on a shared audio line. John can delegate private work by text; continue helping with public group work.')
                 if owner and not await asyncio.to_thread(owner_access.authorized,phone,channel,sid):
@@ -222,7 +224,7 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
     session=session_for(display_body,base,report_call_outcome,executable_tools=registry)
     # Replace outbound-specific opening/voicemail rules, keep bounded action workflow.
     from call_actions import ACTION_INSTRUCTIONS
-    owner_voice_rules="You are Alli speaking with John on his configured number. Use the OPENING. Do not ask him to confirm his name or continue an old mission. Accept clear assignments using the actual listed tools. Save longer account/research/document assignments with start_cloud_work so they continue after he hangs up. Use report_call_outcome for a factual conversation summary; saving a summary alone does not execute his assignment."
+    owner_voice_rules="You are Alli speaking with John on his configured number. Use the OPENING. Do not ask him to confirm his name or continue an old mission. Accept clear assignments using the actual listed tools. For research/write/publish article assignments use start_article_work: only verified direct John instructions can publish on johnrector.me; friends receive a seven-day article link. Save other longer account/research/document assignments with start_cloud_work so they continue after he hangs up. Use report_call_outcome for a factual conversation summary; saving a summary alone does not execute his assignment."
     rules=OWNER_SMS_RULES if owner_sms else CONTACT_RULES if contact_assistance else owner_voice_rules if owner else RULES
     if contact_assistance or owner:
         from work_agent import PHONE_RULES

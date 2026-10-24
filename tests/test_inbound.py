@@ -178,7 +178,7 @@ def test_owner_and_known_contact_greetings_keep_permissions_bounded(channel,monk
         owner={'contact':{'name':'John Rector','source':'owner_configured','is_owner':True}}
         session,tools=await inbound.build_session(BASE,owner,SID,CALLER,channel,Memory())
         assert "OPENING: Hi John, it's Alli. What can I help you with?" in full_instructions(session)
-        expected={'check_owner_access','confirm_identity','remember_contact_name','report_call_outcome','record_promise','get_my_promises','start_cloud_work','get_my_work','continue_cloud_work','cancel_cloud_work','remember_work_preference','find_call_contact','call_person','get_requested_call'}
+        expected={'check_owner_access','confirm_identity','remember_contact_name','report_call_outcome','record_promise','get_my_promises','start_cloud_work','start_article_work','get_my_work','continue_cloud_work','cancel_cloud_work','remember_work_preference','find_call_contact','call_person','get_requested_call'}
         if channel=='voice':expected.update({'start_group_notes','finish_group_notes','pause_group_notes'})
         if channel=='sms':expected.update({'find_call_contact','call_person','get_requested_call','list_open_promises','answer_promise','lookup_my_calendar','find_email_recipient','send_email','save_friend_contact','create_reminder_for_john','find_text_contact','text_contact','get_text_status','cancel_scheduled_text','appointment_reminder_policy','set_appointment_reminders'})
         assert {t.name for t in tools}==expected

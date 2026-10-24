@@ -110,6 +110,8 @@ RULES+='\nUse latest_clarification_at for relative dates in a new clarification.
 class Waiting(Exception):
     def __init__(self,approval):self.approval=approval
 
+RULES+='\nFor a friend’s research/write/publish article request, publish means a finished custom HTML artifact on their seven-day Alli result page. Never use John’s WordPress account or request its permission. Owner WordPress article jobs use only the exact mounted publisher skill and wordpress_* functions; retain every design and QA gate. Do not substitute generic Markdown, invent screenshots, bypass a sandbox, or use private accounts as source material.\n'
+
 class WorkCancelled(Exception):pass
 
 def recent_context(phone):
@@ -167,6 +169,14 @@ def phone_tools(phone,name,sid,*,owner_scope=False,source_request='',include_his
             return await asyncio.to_thread(jobs.create,phone,name,title,instruction,sid,owner_scope=authorized_owner,context=context)
         except ValueError as exc:return dict(ok=False,error=str(exc))
     @function_tool()
+    async def start_article_work(subject:str,public_context:str,publish_to_blog:bool=False) -> dict:
+        """Research, write and finish a custom HTML article. Only an authenticated direct John assignment can publish on johnrector.me. Friends get their usual seven-day result link, even when they say publish. No Mac required. Do not also create a duplicate start_cloud_work job."""
+        try:
+            original=source_reader() if source_reader else source_request
+            return await asyncio.to_thread(__import__('article_tasks').create,phone,name,subject,public_context,publish_to_blog,sid,
+              authorized_owner=authorized_owner,shared_group=shared_group,original=original,source_sid=sid.split(':')[0],origin=origin)
+        except ValueError as exc:return dict(ok=False,error=str(exc))
+    @function_tool()
     async def get_my_work() -> dict:
         """Read only this sender's durable work, results, waiting questions and delivery receipts. Use for a short follow-up before creating duplicate work."""
         return await asyncio.to_thread(bound_listing,phone)
@@ -185,7 +195,7 @@ def phone_tools(phone,name,sid,*,owner_scope=False,source_request='',include_his
         """Remember a useful preference the caller explicitly stated, for their own future work. Never infer attendance, store credentials or grant permissions."""
         try:return await asyncio.to_thread(jobs.remember,phone,preference)
         except ValueError as exc:return dict(ok=False,error=str(exc))
-    return [start_cloud_work,get_my_work,continue_cloud_work,cancel_cloud_work,remember_work_preference]
+    return [start_cloud_work,start_article_work,get_my_work,continue_cloud_work,cancel_cloud_work,remember_work_preference]
 
 def owner_call_tools(phone,sid,source_request='',source_reader=None,latest_request=''):
     @function_tool()
@@ -227,6 +237,8 @@ def functions(job):
       schema('find_connected_tools','Discover tools permitted for this requester. Friend jobs see only public-information apps, never private accounts.',dict(query=dict(type='string')),('query',)),
       schema('run_connected_tool','Execute a permitted connected tool within the original assignment. Routine delegated steps do not require reconfirmation.',
         dict(tool_name=dict(type='string'),arguments_json=dict(type='string')),('tool_name','arguments_json'))]
+    if (job.get('context') or {}).get('public_article'):
+        return [result[0],*__import__('wordpress_publish').schemas(schema,job)]
     result+=__import__('cloud_calls').schemas(schema,job)
     if job['scope']=='owner':
         result += [schema('lookup_calendar','Read John’s live calendar for an owner-requested preparation task.',dict(query=dict(type='string')),('query',))]
@@ -300,7 +312,9 @@ async def execute(job,call,client=None):
     if call.name=='ask_for_clarification':
         if approval.get('call_id')==call.call_id and approval.get('decision')=='reply':return dict(ok=True,answer=approval['answer'],from_john=approval.get('ask_john',False))
         raise Waiting(dict(kind='clarification',call_id=call.call_id,question=jobs.clean(args['question'],1500),ask_john=bool(args.get('ask_john')),arguments=args))
+    if (job.get('context') or {}).get('public_article') and call.name not in __import__('wordpress_publish').NAMES:raise ValueError('Article jobs use public research and their bound publishing/artifact tools only')
     if call.name=='find_connected_tools':return find_tools(args.get('query',''),job['scope'])
+    if call.name in __import__('wordpress_publish').NAMES:return await __import__('wordpress_publish').execute(job,call,args,client)
     if call.name in __import__('cloud_calls').NAMES:return await __import__('cloud_calls').execute(job,call,args,client)
     if job['scope']=='friend' and call.name in __import__('friend_work').NAMES:
         return await __import__('friend_work').execute(job,call,args,client)
@@ -398,7 +412,10 @@ def final_output(response):
 async def execution_tools(job,api):
     if job.get('internal'):return []
     environment=dict(type='container_auto')
-    if job['scope']=='owner' and not (job.get('context') or {}).get('group_delegation'):
+    if (job.get('context') or {}).get('wordpress_authoring'):
+        __import__('wordpress_publish').owner_only(job)
+        environment=dict(type='container_reference',container_id=await __import__('wordpress_publish').container(job,api))
+    elif job['scope']=='owner' and not (job.get('context') or {}).get('group_delegation'):
         environment['skills']=[await __import__('cloud_skills').attachment(api)]
     return [dict(type='web_search'),dict(type='shell',environment=environment),*functions(job)]
 
@@ -416,7 +433,7 @@ async def run_job(job,client=None):
             response=await api.responses.create(model=MODEL,reasoning=dict(REASONING),instructions=RULES,
               input=json.dumps(dict(request=job['instruction'],requester=job['contact_name'],authority=job['scope'],
                 current_eastern_datetime=datetime.now(__import__('zoneinfo').ZoneInfo('America/New_York')).isoformat(),
-                context=job.get('context',{})),ensure_ascii=False),tools=tools,parallel_tool_calls=False,
+                context=({k:v for k,v in job.get('context',{}).items() if k in ('public_article','article_subject','article_public_context','wordpress_authoring','article_destination','wordpress_container_id')} if job.get('context',{}).get('public_article') else job.get('context',{}))),ensure_ascii=False),tools=tools,parallel_tool_calls=False,
               background=True,max_output_tokens=max_output,max_tool_calls=12,
               text=dict(format=FINAL_FORMAT),
               extra_headers={'Idempotency-Key':'alli-work:'+job['id']+':start'+(':'+str(job['context']['review_revision']) if job.get('context',{}).get('review_revision') else '')})
@@ -453,6 +470,10 @@ async def run_job(job,client=None):
                     followups=await asyncio.to_thread(__import__('call_followthrough').queue_assignments,job,final.get('pending_assignments',[]))
                     if followups:result+='\nSaved follow-up jobs: '+', '.join(f['work_id'] for f in followups)
                     if outcome=='completed':await asyncio.to_thread(__import__('call_followthrough').reviewed,job,followups)
+                if (job.get('context') or {}).get('wordpress_authoring') and not job['context'].get('wordpress_verified') and not job['context'].get('qa_dry_run_only'):
+                    outcome='partial'
+                    url=job['context'].get('wordpress_public_url')
+                    result=('The article exists at '+url+' but final publication verification is not complete. ' if url else 'WordPress publication is not verified. The prepared article files and diagnostic details are saved. ')+result
                 artifacts=[]
                 for f in all_files[:6]:
                     key=f['container_id']+':'+f['file_id']

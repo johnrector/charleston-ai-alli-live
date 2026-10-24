@@ -60,3 +60,9 @@ find_people also returns existing future texts. Reuse a matching birthday promis
 rather than making another sender. The text read/cancel tools support a future
 portal promise ID before it enters the SMS outbox; matching future content/time
 also returns the existing request instead of creating another send.
+
+## Personal publisher parity
+
+`delegate_article` queues the complete personal WordPress Publisher article workflow, using the exact copied HTML protection/metadata engine and personal skill. The existing connected WordPress.com account supplies cloud transport; no Mac credentials are copied. Only John’s authenticated direct publication assignment can use the fixed `johnrector.me` adapter. Group/friend article requests receive an original responsive HTML artifact behind their seven-day result link.
+
+The dedicated container mounts only the publisher skill, runs an offline, sandboxed Chromium renderer against server-captured public bytes, and requires actual desktop/320/390 screenshots, heading proof, DOM checks, exact-source dry-run, real featured media, public metadata extraction and live visual review. It cannot access owner email, calendar or private skill snapshots. Failed verification stays partial and records the actual saved URL for repair; uncertain writes are never blindly retried. Art direction is subject-specific, never a single template or generic Markdown.
