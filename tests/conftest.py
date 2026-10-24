@@ -1,24 +1,45 @@
-"""Legacy unit scenarios represent established sessions, not production bypasses.
+"""An isolated real Postgres cluster; never reads DATABASE_URL or production data."""
+import getpass
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+from uuid import uuid4
 
-Hardening tests opt out and exercise the real access boundaries explicitly.
-No behavior here is imported by the application.
-"""
+import psycopg
 import pytest
-from unittest.mock import AsyncMock
 
-@pytest.fixture(autouse=True)
-def isolated_boundary_services(request,monkeypatch):
-    if request.node.path.name=='test_hardening.py':return
-    import security_controls as security,owner_access,public_profile,contact_events,conference_notes
-    monkeypatch.setattr(__import__('work_agent'),'native_authority',AsyncMock(return_value=dict(allowed=True,reason='Isolated established owner assignment')))
-    for name in ('reserve','reserve_in_db','reserve_sms','model','settle_model','settle_work','finish_voice','calendar_write'):
-        monkeypatch.setattr(security,name,lambda *a,**k:None)
-    monkeypatch.setattr(security,'blocked',lambda p:False)
-    monkeypatch.setattr(owner_access,'authorized',lambda phone,*a:security.owner(phone))
-    monkeypatch.setattr(owner_access,'mark_sms',lambda *a:None)
-    monkeypatch.setattr(owner_access,'end_call',lambda *a:None)
-    monkeypatch.setattr(owner_access,'grant_sms',lambda *a:None)
-    monkeypatch.setattr(public_profile,'read',lambda:dict(body=public_profile.DEFAULT,sources=public_profile.SOURCES))
-    monkeypatch.setattr(contact_events,'bind',lambda *a:None)
-    monkeypatch.setattr(conference_notes,'recover',lambda:None)
-    monkeypatch.setattr(__import__('call_followthrough'),'recover',lambda:None)
+
+@pytest.fixture(scope='session')
+def postgres_cluster():
+    bin_dir = Path('/opt/homebrew/opt/postgresql@17/bin')
+    if not (bin_dir/'initdb').is_file():
+        executable = shutil.which('initdb')
+        if not executable:
+            pytest.skip('Postgres binaries are required for database integration tests')
+        bin_dir = Path(executable).parent
+    with tempfile.TemporaryDirectory(prefix='alli-pg-') as temporary:
+        root = Path(temporary)
+        data, sockets = root/'data', root/'sockets'
+        sockets.mkdir()
+        subprocess.run([str(bin_dir/'initdb'), '-D', str(data), '--auth-local=trust',
+                        '--auth-host=reject', '--no-locale', '--encoding=UTF8'], check=True, capture_output=True)
+        subprocess.run([str(bin_dir/'pg_ctl'), '-D', str(data), '-l', str(root/'server.log'),
+                        '-o', f"-h '' -k {sockets} -F", '-w', 'start'], check=True, capture_output=True)
+        try:
+            yield f'dbname=postgres user={getpass.getuser()} host={sockets}'
+        finally:
+            subprocess.run([str(bin_dir/'pg_ctl'), '-D', str(data), '-m', 'immediate', '-w', 'stop'],
+                           check=True, capture_output=True)
+
+
+@pytest.fixture
+def database(postgres_cluster):
+    schema = 'test_'+uuid4().hex
+    with psycopg.connect(postgres_cluster) as db:
+        db.execute(f'CREATE SCHEMA {schema}')  # generated identifier, never user input
+    try:
+        yield postgres_cluster+f' options=-csearch_path={schema}'
+    finally:
+        with psycopg.connect(postgres_cluster) as db:
+            db.execute(f'DROP SCHEMA {schema} CASCADE')

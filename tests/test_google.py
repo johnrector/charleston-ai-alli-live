@@ -1,183 +1,80 @@
-import asyncio
-import json
-from contextlib import contextmanager
-from datetime import datetime, timedelta
+import base64
+from email import policy
+from email.parser import BytesParser
 from unittest.mock import Mock
+
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from cryptography.fernet import Fernet
-import google_integration as g
+
+from adapters.google import GoogleAccount,ProviderRejected,email_address,timestamp
+from alli_core.profile import Profile
 
 
-def test_eastern_and_dst():
-    assert g.local_time('2026-09-29T15:30:00').isoformat()=='2026-09-29T15:30:00-04:00'
-    assert g.local_time('2026-09-29T19:30:00Z').hour==15
-    with pytest.raises(ValueError): g.local_time('2027-03-14T02:30:00')
-    with pytest.raises(ValueError): g.local_time('2026-11-01T01:30:00')
+def account():
+    return GoogleAccount(Mock(),Profile.load('profiles/alli.toml'),sender_email='john@example.com',owner_email='owner@example.com')
 
 
-def test_freebusy_excludes_conflicts(monkeypatch):
-    monkeypatch.setattr(g,'api', lambda *a,**kw: {'calendars':{'primary':{'busy':[{'start':'2030-01-07T15:00:00-05:00','end':'2030-01-07T15:30:00-05:00'}]}}})
-    result=g.availability('2030-01-07T15:00:00','2030-01-07T17:00:00')
-    assert result['suggested_slots'][0]['start']=='2030-01-07T15:30:00-05:00'
-    assert result['timezone']=='America/New_York'
+def test_email_uses_principal_identity_and_assistant_signature_with_real_receipt():
+    google=account()
+    google.request=Mock(return_value={'id':'actual-message','threadId':'actual-thread'})
+    receipt=google.send_email(action_key='stable-key',to='friend@example.com',subject='A delegated task',body='The work is ready.')
+    sent=google.request.call_args.kwargs['body']['raw']
+    message=BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(sent))
+    assert str(message['From'])=='John Rector <john@example.com>'
+    assert str(message['To'])=='friend@example.com'
+    assert "Alli, John Rector's AI assistant" in message.get_content()
+    assert receipt['message_id']=='actual-message'
+    original_id=message['Message-ID']
+    google.send_email(action_key='stable-key',to='friend@example.com',subject='A delegated task',body='The work is ready.')
+    second=BytesParser(policy=policy.default).parsebytes(base64.urlsafe_b64decode(google.request.call_args.kwargs['body']['raw']))
+    assert second['Message-ID']==original_id
 
 
-def test_calendar_errors_are_not_free(monkeypatch):
-    monkeypatch.setattr(g,'api',lambda *a,**k:{'calendars':{'primary':{'errors':[{'reason':'notFound'}]}}})
-    with pytest.raises(g.GoogleError): g.availability('2030-01-07T15:00:00','2030-01-07T17:00:00')
+def test_header_injection_and_timezone_ambiguity_are_rejected_before_send():
+    google=account();google.request=Mock()
+    with pytest.raises(ValueError): google.send_email(action_key='key',to='friend@example.com',subject='Hello\r\nBcc: attacker@example.com',body='Text')
+    with pytest.raises(ValueError): email_address('friend@example.com\r\nBcc: attacker@example.com')
+    with pytest.raises(ValueError): timestamp('2026-11-01T09:00:00')
+    assert timestamp('2026-11-01T09:00:00-05:00').utcoffset().total_seconds()==-18000
+    google.request.assert_not_called()
 
 
-def test_confirmation_and_email_validation():
-    with pytest.raises(ValueError): g.mail('x@example.com','Hi','Hi')
-    with pytest.raises(ValueError): g.meeting('X','x@example.com','2030-01-07T15:00:00',30,'Meet')
-    with pytest.raises(ValueError): g.email_address('x@example.com\r\nBcc: y@example.com')
+def test_availability_exposes_no_private_event_details_and_errors_are_not_free_time():
+    google=account()
+    google.request=Mock(return_value={'calendars':{'primary':{'busy':[{'start':'private-start','end':'private-end'}]}}})
+    result=google.availability('2026-10-26T11:00:00-04:00','2026-10-26T11:15:00-04:00')
+    assert result['available'] is False and 'busy' not in result
+    google.request.return_value={'calendars':{'primary':{'errors':[{'reason':'notFound'}]}}}
+    with pytest.raises(ProviderRejected): google.availability('2026-10-26T11:00:00-04:00','2026-10-26T11:15:00-04:00')
 
 
-def test_oauth_requires_admin_and_rejects_state(monkeypatch):
-    app=FastAPI(); app.include_router(g.router)
-    client=TestClient(app,base_url='https://testserver')
-    monkeypatch.setenv('DEMO_KEY','test-key')
-    monkeypatch.setenv('GOOGLE_TOKEN_ENCRYPTION_KEY',Fernet.generate_key().decode())
-    assert client.post('/google/authorize',data={'admin_key':'wrong'}).status_code==401
-    assert client.get('/google/status').status_code==401
-    assert client.get('/google/callback?state=forged&code=bad').status_code==400
-    cookie=g.store.cipher().encrypt(json.dumps({'state':'valid','verifier':'test'}).encode()).decode()
-    client.cookies.set('alli_oauth',cookie)
-    consume=Mock(return_value=True); monkeypatch.setattr(g.store,'consume_state',consume)
-    assert client.get('/google/callback?state=wrong&code=bad').status_code==400
-    consume.assert_not_called()
+def test_booking_checks_free_time_and_uses_stable_provider_identity():
+    google=account()
+    google.availability=Mock(return_value={'available':False})
+    google.request=Mock()
+    args=dict(action_key='task-and-intent',person_id='person-id',title='Meeting',
+              start='2026-10-26T11:00:00-04:00',end='2026-10-26T11:15:00-04:00')
+    assert google.create_event(**args)['not_attempted'] is True
+    google.request.assert_not_called()
+    google.availability.return_value={'available':True}
+    google.request.return_value={'id':'actual-event-id','status':'confirmed'}
+    assert google.create_event(**args)['event_id']=='actual-event-id'
+    body=google.request.call_args.kwargs['body']
+    assert body['visibility']=='private'
+    assert body['extendedProperties']['private']['ea_person_id']=='person-id'
+    event_id=body['id']
+    google.create_event(**args)
+    assert google.request.call_args.kwargs['body']['id']==event_id
 
 
-def fake_db(monkeypatch, row=None):
-    db=Mock(); db.execute.return_value.fetchone.return_value=row
-    @contextmanager
-    def locked(): yield db
-    monkeypatch.setattr(g.store,'action_lock',locked)
-    return db
-
-
-def test_meeting_invites_and_returns_google_confirmation(monkeypatch):
-    fake_db(monkeypatch)
-    calls=[]
-    def api(method,path,**kw):
-        calls.append((method,path,kw))
-        if method=='GET': raise g.GoogleError('HTTP 404')
-        if path.endswith('freeBusy'): return {'calendars':{'primary':{'busy':[]}}}
-        event=kw['body']; return {**event,'status':'confirmed','htmlLink':'https://calendar.google.com/event/test'}
-    monkeypatch.setattr(g,'api',api)
-    r=g.meeting('Susan','susan@example.com','2030-01-07T15:30:00',30,'Meeting',confirmed=True)
-    assert r['ok'] and r['event_id']
-    assert calls[-1][2]['params']['sendUpdates']=='all'
-    assert calls[-1][2]['body']['attendees'][0]['email']=='susan@example.com'
-
-
-def test_busy_meeting_is_not_created(monkeypatch):
-    fake_db(monkeypatch)
-    def api(method,path,**kw):
-        if method=='GET': raise g.GoogleError('HTTP 404')
-        if path.endswith('freeBusy'): return {'calendars':{'primary':{'busy':[{'start':'2030-01-07T15:00:00-05:00','end':'2030-01-07T16:30:00-05:00'}]}}}
-        pytest.fail('Should never create conflicting event')
-    monkeypatch.setattr(g,'api',api)
-    with pytest.raises(ValueError): g.meeting('Susan','susan@example.com','2030-01-07T15:30:00',30,'Meeting',confirmed=True)
-
-
-def test_uncertain_email_not_retried(monkeypatch):
-    fake_db(monkeypatch,('pending',None))
-    api=Mock(); monkeypatch.setattr(g,'api',api)
-    assert g.mail('susan@example.com','Meeting','Confirmed',True)['status']=='unknown'
-    api.assert_not_called()
-
-
-def test_gmail_success_requires_message_id(monkeypatch):
-    db=fake_db(monkeypatch)
-    monkeypatch.setattr(g,'api',lambda *a,**k:{'id':'gmail123'})
-    assert g.mail('susan@example.com','Meeting','Confirmed',True)['message_id']=='gmail123'
-    db.commit.assert_called_once()
-    monkeypatch.setattr(g,'api',lambda *a,**k:{})
-    with pytest.raises(g.GoogleError): g.mail('susan@example.com','Meeting','Confirmed',True)
-
-
-def test_tool_errors_never_report_success(monkeypatch):
-    def fail(*a): raise RuntimeError('secret detail')
-    assert asyncio.run(g.safely(fail))=={'ok':False,'error':'Google action could not be verified. Do not claim success or blindly retry a send.'}
-
-
-def recovered_event(path):
-    return {'id': path.rsplit('/', 1)[-1], 'status': 'confirmed',
-            'start': {'dateTime': '2030-01-07T15:30:00-05:00'},
-            'end': {'dateTime': '2030-01-07T16:00:00-05:00'},
-            'attendees': [{'email': 'susan@example.com'}]}
-
-
-@pytest.mark.parametrize('cached', [False, True])
-def test_meeting_recovery_reads_current_event_without_insert(monkeypatch, cached):
-    fake_db(monkeypatch, ({'ok': True, 'event_id': 'stale'},) if cached else None)
-    api = Mock(side_effect=lambda method, path, **kw: recovered_event(path))
-    monkeypatch.setattr(g, 'api', api)
-    result = g.meeting('Susan', 'susan@example.com', '2030-01-07T15:30:00', 30, 'Meeting', confirmed=True)
-    assert result['ok'] and result['event_id'] != 'stale'
-    assert api.call_count == 1 and api.call_args.args[0] == 'GET'
-
-
-@pytest.mark.parametrize('change', ['cancelled', 'tentative', 'start', 'end', 'attendee', 'declined', 'missing_status'])
-@pytest.mark.parametrize('cached', [False, True])
-def test_changed_event_fails_closed(monkeypatch, change, cached):
-    fake_db(monkeypatch, ({'ok': True},) if cached else None)
-    def api(method, path, **kw):
-        assert method == 'GET'
-        event = recovered_event(path)
-        if change in ('cancelled', 'tentative'): event['status'] = change
-        elif change in ('start', 'end'): event[change]['dateTime'] = '2030-01-07T17:00:00-05:00'
-        elif change == 'attendee': event['attendees'][0]['email'] = 'other@example.com'
-        elif change == 'declined': event['attendees'][0]['responseStatus'] = 'declined'
-        else: event.pop('status')
-        return event
-    monkeypatch.setattr(g, 'api', api)
-    with pytest.raises(g.GoogleError):
-        g.meeting('Susan', 'susan@example.com', '2030-01-07T15:30:00', 30, 'Meeting', confirmed=True)
-
-
-def test_deleted_cached_event_is_not_recreated(monkeypatch):
-    fake_db(monkeypatch, ({'ok': True},))
-    api = Mock(side_effect=g.GoogleError('HTTP 404'))
-    monkeypatch.setattr(g, 'api', api)
-    with pytest.raises(g.GoogleError, match='do not recreate'):
-        g.meeting('Susan', 'susan@example.com', '2030-01-07T15:30:00', 30, 'Meeting', confirmed=True)
-    assert api.call_count == 1
-
-
-@pytest.mark.parametrize('start,end', [('2030-11-03T01:30:00-04:00', '2030-11-03T01:30:00-05:00'),
-                                    ('2030-03-10T01:30:00-05:00', '2030-03-10T03:30:00-04:00')])
-def test_meeting_duration_is_elapsed_time_across_dst(monkeypatch, start, end):
-    fake_db(monkeypatch)
-    def api(method, path, **kw):
-        if method == 'GET': raise g.GoogleError('HTTP 404')
-        if path.endswith('freeBusy'): return {'calendars': {'primary': {'busy': []}}}
-        assert kw['body']['end']['dateTime'] == end
-        return {**kw['body'], 'status': 'confirmed'}
-    monkeypatch.setattr(g, 'api', api)
-    assert g.meeting('Susan', 'susan@example.com', start, 60, 'Meeting', confirmed=True)['ok']
-
-
-@pytest.mark.parametrize('name,email', [('', 'susan@example.com'), ('  ', 'susan@example.com'),
-    ('x'*201, 'susan@example.com'), ('Susan\nOther', 'susan@example.com'),
-    ('Susan', 'x'*310+'@example.com'), ('Susan', 'not-an-email')])
-def test_bad_attendee_rejected_before_network(monkeypatch, name, email):
-    api = Mock(); monkeypatch.setattr(g, 'api', api)
-    with pytest.raises(ValueError):
-        g.meeting(name, email, '2030-01-07T15:30:00', 30, 'Meeting', confirmed=True)
-    api.assert_not_called()
-
-
-def test_connection_diagnostic_does_not_expose_refresh_payload(monkeypatch):
-    import google_integration as g
-    from google.auth.exceptions import RefreshError
-    monkeypatch.setenv('DEMO_KEY','admin')
-    monkeypatch.setattr(g.store,'initialize',lambda:None)
-    def fail():raise RefreshError('invalid_grant: secret-token-must-not-be-returned')
-    monkeypatch.setattr(g,'fresh_credentials',fail)
-    import pytest
-    with pytest.raises(g.HTTPException):g.status('admin')
-    assert g.CONNECTION_STATUS=={'ok':False,'stage':'token_refresh','error':'invalid_grant','reconnect_required':True}
+def test_contact_event_lookup_does_not_reveal_other_meetings_or_attendees():
+    google=account()
+    google.request=Mock(return_value={'items':[
+        {'id':'private','summary':'Private financial review','description':'Secret'},
+        {'id':'own','summary':'Your meeting','description':'Private notes','attendees':[{'email':'other@example.com'}],
+         'extendedProperties':{'private':{'ea_person_id':'friend-id'}}},
+        {'id':'email-match','summary':'Your other meeting','attendees':[{'email':'friend@example.com'},{'email':'another@example.com'}]}
+    ]})
+    result=google.events('2026-10-25T00:00:00-04:00','2026-10-26T00:00:00-04:00',
+                         person_id='friend-id',contact_email='friend@example.com')
+    assert {event['id'] for event in result['events']}=={'own','email-match'}
+    assert all('description' not in event and 'attendees' not in event for event in result['events'])
