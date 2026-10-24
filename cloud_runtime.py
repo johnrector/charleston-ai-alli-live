@@ -9,6 +9,7 @@ import contextlib
 import hashlib
 import io
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -21,6 +22,8 @@ from google_store import cipher
 VERSION='0.164.0'
 PACKAGE='https://registry.npmjs.org/@openai/codex/-/codex-0.164.0-linux-x64.tgz'
 INTEGRITY='XLAoaWsGOT2khzl+P4FYDPTkzAr9W0VFXFaVkqlFdkM0soa1gH/4S0wSD57Ek3HHwkirAEGz2/Mwehseh+l5Mg=='
+RUNTIME_MEMBER='package/vendor/x86_64-unknown-linux-musl/bin/codex'
+logger=logging.getLogger(__name__)
 
 def initialize(db):
     db.execute('''CREATE TABLE IF NOT EXISTS alli_cloud_runtime (
@@ -45,7 +48,7 @@ def binary():
         if base64.b64encode(digest.digest()).decode()!=INTEGRITY:raise ValueError('Runtime package integrity mismatch')
         tmp.seek(0)
         with tarfile.open(fileobj=tmp,mode='r:gz') as tar:
-            matches=[m for m in tar if m.isfile() and m.name.endswith('/codex/codex')]
+            matches=[m for m in tar if m.isfile() and m.name==RUNTIME_MEMBER]
             if len(matches)!=1:raise ValueError('Unexpected runtime package')
             stream=tar.extractfile(matches[0])
             with path.with_suffix('.pending').open('wb') as target:shutil.copyfileobj(stream,target)
@@ -118,11 +121,20 @@ class CloudRuntime:
         self.last_credentials=digest
 
     async def start(self):
+        while True:
+            self.process=None;self.reader=None;self.profile=None;self.lock_db=None
+            self.thread=None;self.tools={};self.apps=[];self.skills=[];self.login=None
+            self.state='starting';self.error='';self.last_credentials=''
+            await self.serve()
+            await asyncio.sleep(30)
+
+    async def serve(self):
+        phase='package'
         try:
             executable=await asyncio.to_thread(binary)
             # A deployment can overlap the retiring instance. Only one app
             # runtime may rotate this account's refresh tokens at a time.
-            self.lock_db=await asyncio.to_thread(store.connection)
+            phase='profile';self.lock_db=await asyncio.to_thread(store.connection)
             self.lock_db.autocommit=True
             while not (await asyncio.to_thread(self.lock_db.execute,'SELECT pg_try_advisory_lock(301849630187)')).fetchone()[0]:
                 self.state='waiting_for_previous_instance';await asyncio.sleep(2)
@@ -134,6 +146,7 @@ class CloudRuntime:
             self.process=await asyncio.create_subprocess_exec(executable,'app-server',stdin=asyncio.subprocess.PIPE,
               stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,env=env,limit=8*1024*1024,cwd=str(self.profile))
             self.reader=asyncio.create_task(self.receive())
+            phase='initialize'
             await self.rpc('initialize',dict(clientInfo=dict(name='alli_cloud_tools',title='Alli cloud tools',version='1.0'),capabilities=dict(experimentalApi=True)))
             await self.send(dict(method='initialized',params={}))
             await self.refresh()
@@ -141,7 +154,8 @@ class CloudRuntime:
                 await asyncio.sleep(30);await asyncio.to_thread(self.persist)
                 if self.process.returncode is not None:raise ValueError('Runtime stopped')
         except asyncio.CancelledError:raise
-        except Exception:
+        except Exception as exc:
+            logger.warning('Cloud app runtime failed during %s (%s); retrying in 30 seconds',phase,type(exc).__name__)
             self.state='needs_connection';self.error='Cloud tool runtime needs attention. Existing phone, calendar and research features remain available.'
         finally:
             if self.process and self.process.returncode is None:

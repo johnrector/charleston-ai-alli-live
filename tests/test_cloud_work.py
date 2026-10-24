@@ -10,12 +10,32 @@ import work_agent as agent
 import work_store as jobs
 import work_routes as routes
 import cloud_skills
+import cloud_runtime
 from test_inbound import BASE,Memory,SID,CALLER
 import inbound_communications as inbound
 
 OWNER='+18433276008'
 FRIEND='+18435550100'
 OTHER='+18435550101'
+
+def test_pinned_linux_runtime_extracts_the_actual_official_package_layout(tmp_path,monkeypatch):
+    import tarfile,hashlib,base64
+    content=b'official-runtime-placeholder'
+    package=io.BytesIO()
+    with tarfile.open(fileobj=package,mode='w:gz') as archive:
+        for name,data in ((cloud_runtime.RUNTIME_MEMBER,content),('package/vendor/x86_64-unknown-linux-musl/bin/codex-code-mode-host',b'other-executable')):
+            info=tarfile.TarInfo(name);info.size=len(data);archive.addfile(info,io.BytesIO(data))
+    data=package.getvalue()
+    monkeypatch.delenv('ALLI_CODEX_BINARY',raising=False)
+    monkeypatch.setattr(cloud_runtime.os,'uname',lambda:NS(sysname='Linux'))
+    monkeypatch.setattr(cloud_runtime,'Path',lambda _:tmp_path)
+    monkeypatch.setattr(cloud_runtime.urllib.request,'urlopen',lambda *a,**k:io.BytesIO(data))
+    monkeypatch.setattr(cloud_runtime,'INTEGRITY',base64.b64encode(hashlib.sha512(data).digest()).decode())
+    result=cloud_runtime.binary()
+    assert result==str(tmp_path/'codex')
+    assert (tmp_path/'codex').read_bytes()==content
+    assert (tmp_path/'codex').stat().st_mode&0o777==0o700
+    assert not (tmp_path/'codex-code-mode-host').exists()
 
 @pytest.mark.parametrize('channel',['voice','sms'])
 def test_approved_friends_can_delegate_but_cannot_dial_or_access_accounts(channel,monkeypatch):
