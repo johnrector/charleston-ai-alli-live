@@ -110,7 +110,7 @@ RULES+='\nUse latest_clarification_at for relative dates in a new clarification.
 class Waiting(Exception):
     def __init__(self,approval):self.approval=approval
 
-RULES+='\nFor a friend’s research/write/publish article request, publish means a finished custom HTML artifact on their seven-day Alli result page. Never use John’s WordPress account or request its permission. Owner WordPress article jobs use only the exact mounted publisher skill and wordpress_* functions; retain every design and QA gate. Do not substitute generic Markdown, invent screenshots, bypass a sandbox, or use private accounts as source material.\n'
+RULES+='\nFor a friend’s research/write/publish article request, publish means a finished custom HTML artifact on their seven-day Alli result page. Never use John’s WordPress account or request its permission. Owner WordPress article jobs use the exact mounted Publisher skill in OpenAI’s cloud and the connected native WordPress.com plugin through find_connected_tools/run_connected_tool. The agent owns authoring and QA; Render transports assignments, tool calls, artifacts and receipts. Retain every design and QA gate. Historical diagnostic jobs may expose compatibility functions; use only tools actually supplied. Do not substitute generic Markdown, invent screenshots, bypass a sandbox, or use private accounts as source material.\n'
 
 class WorkCancelled(Exception):pass
 
@@ -238,7 +238,7 @@ def functions(job):
       schema('run_connected_tool','Execute a permitted connected tool within the original assignment. Routine delegated steps do not require reconfirmation.',
         dict(tool_name=dict(type='string'),arguments_json=dict(type='string')),('tool_name','arguments_json'))]
     if __import__('article_handoff').enabled(job):
-        return result+__import__('article_handoff').schemas(schema)
+        return (result if job.get('context',{}).get('wordpress_authoring') else [result[0]])+__import__('article_handoff').schemas(schema)
     if (job.get('context') or {}).get('public_article'):
         return [result[0],*(__import__('wordpress_publish').schemas(schema,job) if job.get('context',{}).get('wordpress_authoring') else __import__('article_studio').schemas(schema))]
     result+=__import__('cloud_calls').schemas(schema,job)
@@ -256,7 +256,7 @@ def find_tools(query,scope='owner',job=None):
     if runtime.state!='connected':return dict(ok=False,error='Cloud account not connected. John can connect it from Tools in his dashboard.')
     terms=query.lower().split()
     import phone_tool_policy as policy
-    permitted=[t for t in runtime.tools.values() if (scope=='owner' and (policy.allowed(t['name'],job) if not job or not __import__('article_handoff').enabled(job) else __import__('article_handoff').permitted(t['name'],job))) or (t['name'] in PUBLIC_TOOLS and (t.get('annotations') or {}).get('readOnlyHint') is True)]
+    permitted=[t for t in runtime.tools.values() if (scope=='owner' and (policy.allowed(t['name'],job) if not job or not __import__('article_handoff').enabled(job) else __import__('article_handoff').permitted(t['name'],job))) or (not (job and __import__('article_handoff').enabled(job)) and t['name'] in PUBLIC_TOOLS and (t.get('annotations') or {}).get('readOnlyHint') is True)]
     choices=sorted(permitted,key=lambda t:sum(w in (t['name']+' '+t.get('description','')).lower() for w in terms),reverse=True)
     matches=[t for t in choices if any(w in (t['name']+' '+t.get('description','')).lower() for w in terms)][:8]
     return dict(ok=True,tools=[dict(name=t['name'],description=t.get('description',''),input_schema=t['inputSchema'],read_only=(t.get('annotations') or {}).get('readOnlyHint',False)) for t in matches])
