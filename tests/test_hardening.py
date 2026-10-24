@@ -158,7 +158,7 @@ def test_private_result_requires_owner_signin_and_revocation_keeps_admin_access(
     app=FastAPI();work_routes.install_work(app);client=TestClient(app,follow_redirects=False)
     url='/work/ABC/'+work_store.result_token(job)
     assert client.get(url).status_code==303
-    assert client.get('/dashboard/work/ABC').status_code==401
+    redirect=client.get('/dashboard/work/ABC');assert redirect.status_code==303 and redirect.headers['location']=='/dashboard?result=ABC' and 'PRIVATE CONTENT' not in redirect.text
     job['link_revoked']=True
     assert client.get(url).status_code==404
     monkeypatch.setattr(work_routes.dashboard,'authenticate',lambda req:dict(method='cookie',csrf='x'))

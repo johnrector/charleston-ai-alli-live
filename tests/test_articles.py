@@ -63,7 +63,9 @@ def test_friend_article_reader_is_sandboxed_and_expires(monkeypatch):
     inline=client.get(link+'/files/HTML?view=article')
     assert inline.status_code==200 and inline.headers['content-disposition'].startswith('inline')
     assert "default-src 'none'" in inline.headers['content-security-policy'] and 'allow-same-origin' not in inline.headers['content-security-policy']
-    assert client.get('/dashboard/api/work/ARTICLE/files/HTML?view=article').status_code==401
+    redirect=client.get('/dashboard/api/work/ARTICLE/files/HTML?view=article',follow_redirects=False)
+    assert redirect.status_code==303 and redirect.headers['location']=='/dashboard?result=ARTICLE'
+    assert client.get('/dashboard/api/work/ARTICLE/files/HTML').status_code==401
     job['completed_at']=(datetime.now(timezone.utc)-timedelta(days=8)).isoformat()
     assert client.get(link).status_code==404 and client.get(link+'/files/HTML?view=article').status_code==404
 

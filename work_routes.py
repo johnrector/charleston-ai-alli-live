@@ -135,8 +135,11 @@ def install_work(app):
     @app.get('/work/{wid}/{token}',include_in_schema=False)
     async def result(wid:str,token:str,request:Request):return await render_result(wid,token,request=request)
 
-    @app.get('/dashboard/work/{wid}',dependencies=[Depends(auth)],include_in_schema=False)
-    async def owner_result(wid:str):return await render_result(wid,admin=True)
+    @app.get('/dashboard/work/{wid}',include_in_schema=False)
+    async def owner_result(wid:str,request:Request):
+        try:await auth(request)
+        except HTTPException:return RedirectResponse('/dashboard?result='+quote(wid,safe=''),status_code=303)
+        return await render_result(wid,admin=True)
 
     async def file_response(wid,fid,view=''):
         artifact=next((f for f in await asyncio.to_thread(files,wid,content=True) if f['id']==fid),None)
@@ -148,12 +151,21 @@ def install_work(app):
           'X-Frame-Options':'SAMEORIGIN' if inline else 'DENY',
           'Content-Security-Policy':("default-src 'none'; style-src 'unsafe-inline' https:; img-src https: data:; font-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-popups" if inline else "default-src 'none'; sandbox")})
 
-    @app.get('/dashboard/api/work/{wid}/files/{fid}',dependencies=[Depends(auth)],include_in_schema=False)
-    async def owner_artifact(wid:str,fid:str,view:str=''):return await file_response(wid,fid,view)
+    @app.get('/dashboard/api/work/{wid}/files/{fid}',include_in_schema=False)
+    async def owner_artifact(wid:str,fid:str,request:Request,view:str=''):
+        try:await auth(request)
+        except HTTPException:
+            if view=='article':return RedirectResponse('/dashboard?result='+quote(wid,safe=''),status_code=303)
+            raise
+        return await file_response(wid,fid,view)
 
     @app.get('/work/{wid}/{token}/files/{fid}',include_in_schema=False)
     async def artifact(wid:str,token:str,fid:str,request:Request,view:str=''):
         job=await asyncio.to_thread(jobs.read,wid)
         if not jobs.valid_token(job,token) or job['state'] not in ('completed','partial','blocked') or not job['result']:raise HTTPException(404,'File unavailable')
-        if job['scope']=='owner' or job.get('private_result'):await auth(request)
+        if job['scope']=='owner' or job.get('private_result'):
+            try:await auth(request)
+            except HTTPException:
+                if view=='article':return RedirectResponse('/dashboard?result='+quote(wid,safe=''),status_code=303)
+                raise
         return await file_response(wid,fid,view)

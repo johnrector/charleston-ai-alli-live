@@ -59,6 +59,9 @@ def verify_code(challenge,code):
     token=secrets.token_urlsafe(32)
     valid=False
     with store.connection() as db:
+        if not challenge:
+            latest=db.execute("SELECT id FROM alli_dashboard_login WHERE NOT consumed AND expires_at>now() ORDER BY created_at DESC LIMIT 1 FOR UPDATE").fetchone()
+            challenge=latest[0] if latest else ''
         row=db.execute('SELECT code_digest,attempts,consumed,expires_at FROM alli_dashboard_login WHERE id=%s FOR UPDATE',(challenge,)).fetchone()
         if row and not row[2] and row[1]<5 and row[3]>datetime.now(timezone.utc):
             db.execute('UPDATE alli_dashboard_login SET attempts=attempts+1 WHERE id=%s',(challenge,))
@@ -97,7 +100,7 @@ def write_guard(request,auth):
 class Input(BaseModel):
     model_config=ConfigDict(extra='forbid')
 class Verify(Input):
-    challenge: str=Field(min_length=32,max_length=32,pattern=r'^[a-f0-9]+$')
+    challenge: str=Field(default='',max_length=32,pattern=r'^(?:[a-f0-9]{32})?$')
     code: str=Field(min_length=6,max_length=6,pattern=r'^\d+$')
 class NewPromise(Input):
     title: str=Field(min_length=1,max_length=180)
@@ -194,21 +197,25 @@ def install_dashboard(app,communications,reminders,worker):
     async def verify(body:Verify,response:Response):
         try: token=await asyncio.to_thread(verify_code,body.challenge,body.code)
         except ValueError as exc: raise HTTPException(401,str(exc))
-        response.set_cookie(COOKIE,token,max_age=SESSION_SECONDS,secure=True,httponly=True,samesite='strict',path='/')
+        response.set_cookie(COOKIE,token,max_age=SESSION_SECONDS,secure=True,httponly=True,samesite='lax',path='/')
         return dict(ok=True,csrf=digest(token+':csrf'))
 
     async def auth(request:Request): return await asyncio.to_thread(authenticate,request)
     async def write(request:Request,identity=Depends(auth)):
         write_guard(request,identity); return identity
     @app.get('/dashboard/api/session')
-    async def session(identity=Depends(auth)): return dict(ok=True,csrf=identity.get('csrf',''))
+    async def session(response:Response,identity=Depends(auth)):
+        if identity.get('method')=='cookie':
+            # Refresh browser attributes without extending the server's 12-hour session.
+            response.set_cookie(COOKIE,identity['token'],max_age=SESSION_SECONDS,secure=True,httponly=True,samesite='lax',path='/')
+        return dict(ok=True,csrf=identity.get('csrf',''))
     @app.post('/dashboard/api/logout')
     async def logout(response:Response,identity=Depends(write)):
         if identity['method']=='cookie':
             def revoke():
                 with store.connection() as db: db.execute('DELETE FROM alli_dashboard_session WHERE digest=%s',(digest(identity['token']),))
             await asyncio.to_thread(revoke)
-        response.delete_cookie(COOKIE,path='/',secure=True,httponly=True,samesite='strict')
+        response.delete_cookie(COOKIE,path='/',secure=True,httponly=True,samesite='lax')
         return dict(ok=True)
     @app.get('/dashboard/api/data',dependencies=[Depends(auth)])
     async def snapshot():

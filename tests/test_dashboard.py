@@ -55,7 +55,7 @@ def test_code_verification_sets_secure_cookie(client,monkeypatch):
     monkeypatch.setattr(d,'verify_code',lambda challenge,code:'random-session-token')
     response=client.post('/dashboard/api/verify',json={'challenge':'a'*32,'code':'123456'})
     cookie=response.headers['set-cookie']
-    assert '__Host-alli_session=' in cookie and 'HttpOnly' in cookie and 'Secure' in cookie and 'SameSite=strict' in cookie
+    assert '__Host-alli_session=' in cookie and 'HttpOnly' in cookie and 'Secure' in cookie and 'SameSite=lax' in cookie and 'Max-Age=43200' in cookie
     assert 'random-session-token' not in response.text
     assert response.json()['csrf']==d.digest('random-session-token:csrf')
 
@@ -117,3 +117,24 @@ def test_invalid_promises_fail_before_database(args,monkeypatch):
     initialize=Mock();monkeypatch.setattr(p.store,'initialize',initialize)
     with pytest.raises(ValueError):p.create(**args)
     initialize.assert_not_called()
+
+
+def test_code_entry_survives_lost_browser_challenge(client,monkeypatch):
+    seen=[]
+    monkeypatch.setattr(d,'verify_code',lambda challenge,code:seen.append((challenge,code)) or 'restored-session')
+    response=client.post('/dashboard/api/verify',json={'code':'123456'})
+    assert response.status_code==200 and seen==[('','123456')]
+    assert 'SameSite=lax' in response.headers['set-cookie']
+
+def test_latest_code_still_enforces_attempt_lock(monkeypatch):
+    db=Mock()
+    def execute(sql,*args):
+        result=Mock()
+        result.fetchone.return_value=('a'*32,) if sql.startswith('SELECT id FROM alli_dashboard_login') else ('digest',5,False,datetime.now(timezone.utc)+timedelta(minutes=5))
+        return result
+    db.execute.side_effect=execute
+    @contextmanager
+    def connection():yield db
+    monkeypatch.setattr(d.store,'initialize',lambda:None);monkeypatch.setattr(d.store,'connection',connection)
+    with pytest.raises(ValueError):d.verify_code('','123456')
+    assert not any('INSERT INTO alli_dashboard_session' in c.args[0] for c in db.execute.call_args_list)

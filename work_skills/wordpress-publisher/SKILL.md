@@ -5,6 +5,13 @@ description: Create, publish, stage, update, and verify original art-directed cu
 
 # Cloud agent execution
 
+CURRENT OWNER PREFERENCE: write and publish; John judges artistic quality himself.
+Do not require or run artistic scoring, independent image reviews or screenshot
+approval as a publication gate. Historical visual-review steps below are advisory
+and overridden by this preference. Preserve original custom HTML and use the exact
+source engine plus native CMS read-back/public URL checks for technical validity.
+Do not confuse artistic judgment with authorization.
+
 You are the authoring agent running in OpenAI's cloud. Render only preserves the
 assignment, forwards permitted plugin calls and transports artifacts/receipts.
 You own research, writing, art direction, source validation, repairs and QA.

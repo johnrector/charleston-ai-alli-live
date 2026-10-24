@@ -194,7 +194,7 @@ def finish(wid,result,sources,files,*,outcome='completed'):
             lead={'completed':'Your work is ready','partial':'I finished part of your work; some steps still need attention','blocked':'Your work needs attention; I saved the details'}[outcome]
             public=(job[5] or {}).get('wordpress_public_url','') if len(job)>5 and (job[5] or {}).get('wordpress_verified') and outcome=='completed' else ''
             receipt=(job[5] or {}).get('publication_receipt') or {}
-            if receipt.get('source')=='native_wordpress_plugin' and receipt.get('status')=='publish' and outcome=='completed':public=receipt.get('url','')
+            if receipt.get('source') in {'native_wordpress_plugin','owner_wordpress_publisher_plugin'} and receipt.get('status')=='publish' and outcome=='completed':public=receipt.get('url','')
             parsed=__import__('urllib.parse',fromlist=['urlsplit']).urlsplit(public)
             published=parsed.scheme=='https' and parsed.hostname=='johnrector.me' and not parsed.username and not parsed.password
             message=f"Alli: {lead} — {job[2]}.\n{public if published else link}\nReply here with any changes you'd like."+('' if published else ' This result link expires in 7 days.')
