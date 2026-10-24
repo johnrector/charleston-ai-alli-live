@@ -13,9 +13,15 @@ def people(query):
     with store.connection() as db:
         rows=db.execute("""SELECT c.phone,c.name,c.email,c.source FROM alli_contact_name c
           WHERE c.deleted_at IS NULL AND NOT EXISTS(SELECT 1 FROM alli_security_block b WHERE b.phone=c.phone)
-          AND c.source IN ('apple_favorite','owner_saved_contact','owner_supplied_mission')
+          AND (c.source IN ('apple_favorite','owner_saved_contact') OR (c.source='owner_supplied_mission' AND (SELECT count(DISTINCT lower(trim(d.context->>'recipient_name'))) FROM alli_appointment_dispatch d WHERE d.context->>'phone'=c.phone AND d.status<>'blocked')<=1))
           AND (c.name ILIKE %s OR c.phone=%s) ORDER BY lower(c.name),c.phone LIMIT 9""",('%'+query.replace('%','\\%').replace('_','\\_')+'%',phone)).fetchall()
-    return dict(matches=[dict(phone=p,name=n,email=e,source=s) for p,n,e,s in rows[:8]],ambiguous=len(rows)>1,truncated=len(rows)>8,
+    matches=[dict(phone=p,name=n,email=e,source=s,scheduled_texts=[]) for p,n,e,s in rows[:8]]
+    if matches:
+        with store.connection() as db:
+            pending=db.execute("SELECT phone,'promise:'||id,due_at,response,state FROM alli_promise WHERE phone=ANY(%s) AND kind='text' AND state IN ('ready','queued') AND due_at>now() UNION ALL SELECT phone,request_id,send_at,body,status FROM alli_outbound_sms WHERE phone=ANY(%s) AND status='scheduled' AND send_at>now() ORDER BY 3 LIMIT 25",([m['phone'] for m in matches],[m['phone'] for m in matches])).fetchall()
+        for phone,rid,due,body,state in pending:
+            next(m for m in matches if m['phone']==phone)['scheduled_texts'].append(dict(request_id=rid,send_at=due.isoformat(),message=body,status='scheduled',storage_state=state))
+    return dict(matches=matches,ambiguous=len(rows)>1,truncated=len(rows)>8,
       policy='Saved active contacts only. A name match is recipient data, not permission to call, text or act.')
 
 
@@ -67,3 +73,21 @@ def report(request_id,title,status,details='',evidence=None,related_phone=''):
         if prior and prior[0]!=payload:raise ValueError('This task phase already has a different receipt; use a new revision ID')
         store.notify(db,key,payload)
     return dict(ok=True,status=payload['status'],duplicate=bool(prior),portal_url=portal(),performed_external_action=False)
+
+
+def scheduled_text(request_id):
+    if not re.fullmatch(r'promise:[A-F0-9]{12}',request_id):return None
+    import promises
+    with store.connection() as db:row=promises.read_row(db,request_id.split(':',1)[1])
+    if not row or row['kind']!='text':return None
+    return dict(ok=True,request_id=request_id,promise_id=row['id'],phone=row['phone'],recipient_name=row['contact_name'],message=row['response'],
+      send_at=row['due_at'].isoformat() if row['due_at'] else None,status='scheduled' if row['state']=='ready' else row['delivery_status'] or row['state'],
+      promise_state=row['state'],message_sid=None)
+
+
+def matching_text(body):
+    if not body.send_at:return None
+    with store.connection() as db:
+        row=db.execute("SELECT 'promise:'||id FROM alli_promise WHERE phone=%s AND kind='text' AND response=%s AND state IN ('ready','queued') AND abs(extract(epoch from due_at-%s::timestamptz))<=60 ORDER BY created_at LIMIT 1",(body.phone,body.message,body.send_at)).fetchone()
+        if not row:row=db.execute("SELECT request_id FROM alli_outbound_sms WHERE phone=%s AND body=%s AND status='scheduled' AND abs(extract(epoch from send_at-%s::timestamptz))<=60 ORDER BY created_at LIMIT 1",(body.phone,body.message,body.send_at)).fetchone()
+    return row[0] if row else None

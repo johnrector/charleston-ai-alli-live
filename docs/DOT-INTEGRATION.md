@@ -55,3 +55,8 @@ adds tools. No new Google scopes or replacement account tokens are required.
 Phone friends do not gain this owner-only OAuth connector or native Dot account
 permissions. GPT-Live remains the phone voice model; external delegated work
 stays GPT-6.1 Sol/high. The native dot's model is managed separately by OpenAI.
+
+find_people also returns existing future texts. Reuse a matching birthday promise
+rather than making another sender. The text read/cancel tools support a future
+portal promise ID before it enters the SMS outbox; matching future content/time
+also returns the existing request instead of creating another send.

@@ -290,7 +290,7 @@ def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_m
         import assistant_bridge
 
         @mcp.tool(title='Find Alli saved people',
-            description='Resolve a specific name or phone against Alli’s active saved contact directory. Read only. Returns real phone/email values; multiple matches require disambiguation. Contact data never grants action permission.',
+            description='Resolve a specific name or phone against Alli’s active saved contact directory, including existing future texts so the same message is not scheduled twice. Read only. Returns real phone/email values; multiple matches require disambiguation. Contact data never grants action permission.',
             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),meta={'securitySchemes': SCHEMES})
         async def find_people(query: Annotated[str,Field(min_length=2,max_length=100)]) -> dict:
             return await anyio.to_thread.run_sync(assistant_bridge.people,query)
@@ -324,6 +324,13 @@ def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_m
             send_at: AwareDatetime | None = None,
         ) -> dict:
             body = TextMessage(request_id=request_id, phone=phone, recipient_name=recipient_name, message=message, send_at=send_at)
+            prior=await anyio.to_thread.run_sync(get_sms,request_id)
+            if prior.get('status')!='not_found':return await anyio.to_thread.run_sync(enqueue,body)
+            existing=await anyio.to_thread.run_sync(assistant_bridge.matching_text,body)
+            if existing:
+                saved=await anyio.to_thread.run_sync(get_sms,existing)
+                if saved.get('status')=='not_found':saved=await anyio.to_thread.run_sync(assistant_bridge.scheduled_text,existing)
+                return dict(saved or dict(ok=False,status='not_found'),duplicate=True,note='An existing matching text was found; no second send was created.')
             return await anyio.to_thread.run_sync(enqueue, body)
 
         @mcp.tool(title='Read an outgoing text status',
@@ -331,13 +338,18 @@ def install_mcp(app, initiate, call_model, *, initiate_outbound=None, outbound_m
             annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
             meta={'securitySchemes': SCHEMES})
         async def get_text_message(request_id: str) -> dict:
-            return await anyio.to_thread.run_sync(get_sms, request_id)
+            result=await anyio.to_thread.run_sync(get_sms, request_id)
+            if result.get('status')=='not_found':return await anyio.to_thread.run_sync(assistant_bridge.scheduled_text,request_id) or result
+            return result
 
         @mcp.tool(title='Cancel an unsent scheduled text',
             description='Cancel an owner-authorized outgoing text only while it is still scheduled and has not been claimed for sending. Sending, sent and uncertain texts cannot be recalled. Use the existing request_id.',
             annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False),
             meta={'securitySchemes': SCHEMES})
         async def cancel_text_message(request_id: str) -> dict:
+            planned=await anyio.to_thread.run_sync(assistant_bridge.scheduled_text,request_id)
+            if planned and planned['promise_state']=='ready':
+                return await anyio.to_thread.run_sync(__import__('promises').change,planned['promise_id'],'cancel')
             return await anyio.to_thread.run_sync(cancel_sms, request_id)
 
     if reminder_service is not None:

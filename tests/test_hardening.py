@@ -442,3 +442,33 @@ def test_birthday_schedule_preserves_eastern_time_after_daylight_saving_ends():
     from zoneinfo import ZoneInfo
     when=datetime(2026,11,1,9,0,tzinfo=ZoneInfo('America/New_York'))
     assert when.astimezone(timezone.utc).hour==14
+
+
+def test_dot_reuses_an_existing_future_text_across_portal_and_plugin(monkeypatch):
+    import assistant_bridge as bridge,scheduled_sms as sms,mcp_integration as mcp
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    class Input(BaseModel):pass
+    get=Mock(return_value=dict(ok=False,status='not_found'))
+    enqueue=Mock();monkeypatch.setattr(sms,'get',get);monkeypatch.setattr(sms,'enqueue',enqueue)
+    monkeypatch.setattr(bridge,'matching_text',lambda body:'promise:ABCDEF123456')
+    monkeypatch.setattr(bridge,'scheduled_text',lambda rid:dict(ok=True,request_id=rid,status='scheduled',message='Happy birthday!'))
+    server=mcp.install_mcp(FastAPI(),lambda x:None,Input,read_updates=lambda *a:None,sms_service=object())
+    result=asyncio.run(server.call_tool('send_text_message',dict(request_id='different-dot-id',phone=CALLER,recipient_name='Jane',message='Happy birthday!',send_at='2026-11-01T09:00:00-05:00')))
+    assert enqueue.call_count==0
+    assert 'promise:ABCDEF123456' in str(result) and 'Happy birthday!' in str(result)
+
+
+def test_new_scheduling_helper_preserves_existing_request_id_conflict_check(monkeypatch):
+    import assistant_bridge as bridge,scheduled_sms as sms,mcp_integration as mcp
+    from fastapi import FastAPI
+    from pydantic import BaseModel
+    class Input(BaseModel):pass
+    monkeypatch.setattr(sms,'get',lambda rid:dict(ok=True,status='scheduled'))
+    enqueue=Mock(side_effect=ValueError('different approved content'))
+    monkeypatch.setattr(sms,'enqueue',enqueue)
+    matching=Mock();monkeypatch.setattr(bridge,'matching_text',matching)
+    server=mcp.install_mcp(FastAPI(),lambda x:None,Input,read_updates=lambda *a:None,sms_service=object())
+    with pytest.raises(__import__('mcp.server.fastmcp.exceptions',fromlist=['ToolError']).ToolError,match='different approved content'):
+        asyncio.run(server.call_tool('send_text_message',dict(request_id='existing',phone=CALLER,recipient_name='Jane',message='Changed',send_at='2026-11-01T09:00:00-05:00')))
+    enqueue.assert_called_once();matching.assert_not_called()
