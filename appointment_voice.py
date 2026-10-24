@@ -62,7 +62,8 @@ class OutboundVoice:
 
     Channels are retained only while pending/active. Default sessions are absent:
     an uncorrelated/replayed connection cannot fall back to the demo instructions.
-    Requires one process, as TAC's session transport is process-local.
+    A connected stream remains process-local. Pending call bindings are durable
+    so a replacement process can accept the initial signed media connection.
     """
     def __init__(self, tac, base_session, store=ledger, read_provider=False):
         self.tac, self.base_session, self.store = tac, base_session, store
@@ -70,6 +71,57 @@ class OutboundVoice:
         self.max_pending = 100
         self.read_provider = read_provider
         tac.on_conversation_ended(self.conversation_ended)
+
+    def build_channel(self,body,key):
+        from outbound_profiles import session_for,tools_for
+        tool = outcome_tool(key, self.store)
+        call_sid_ref = {'value': None}
+
+        @function_tool()
+        async def end_call(reason: str = 'completed') -> dict:
+            """End this call after a wrong person, refusal, or completed human conversation. Do not end voicemail greetings; the service waits for the beep. Save the outcome first when appropriate. No other phone call can be selected."""
+            if reason not in {'completed', 'wrong_person', 'refused'}:
+                return {'ok': False, 'error': 'Use completed, wrong_person, or refused'}
+            if reason == 'completed' and getattr(channel, '_alli_answered_by', None) != 'human':
+                return {'ok': False, 'error': 'Wait for answer detection; voicemail is handled by the service'}
+            sid = call_sid_ref['value']
+            if not sid:
+                row = await asyncio.to_thread(self.store.get, key)
+                sid = row.get('call_sid') if row else None
+            if not sid:
+                return {'ok': False, 'error': 'This call binding is not ready'}
+            logging.getLogger('alli.call').info('outbound_end_call call_sid=%s source=conversation_tool', sid)
+            await channel.end_call(sid)
+            return {'ok': True}
+
+        executable_tools = tools_for(body, tool)
+        session = session_for(body, self.base_session, tool, executable_tools=executable_tools)
+        session['delegation']['responses']['tools'].append(end_call.to_realtime_format())
+        session['instructions'] += '\nCALL ENDING: After recording the final outcome, use end_call to hang up. For a wrong person or refusal, use end_call with reason=wrong_person or reason=refused immediately. If you hear voicemail, stop speaking and wait for the service, rather than using end_call. It can only end this call.\n'
+        from live_observer import AlliLiveConfig
+        channel = VoiceChannel(self.tac, config=AlliLiveConfig(bound_phone=os.getenv('ALLI_OWNER_PHONE',body.phone),
+            tools=executable_tools + [end_call], default_session_config=session,
+            welcome_instruction='Speak immediately. Follow the purpose-specific OPENING in this session and then listen.'))
+        channel._alli_ledger_key = key
+        channel._alli_voicemail_message = voicemail_message(body)
+        channel._alli_voicemail_policy = body.voicemail_policy
+        channel._alli_answered_by = None
+        return channel,session,call_sid_ref
+
+    async def resolve_channel(self,token,*,stream=False):
+        channel=self.channels.get(token)
+        if channel is not None:return channel
+        row=await asyncio.to_thread(self.store.resolve_transport,token)
+        if not row or len(self.channels)>=self.max_pending:return None
+        if stream and row.get('disposition') in {'completed','busy','failed','no-answer','canceled'}:return None
+        from outbound_profiles import OutboundCall
+        body=OutboundCall.model_validate(row['context'])
+        channel,session,sid_ref=self.build_channel(body,row['key'])
+        sid_ref['value']=row.get('call_sid')
+        self.channels[token]=channel
+        asyncio.get_running_loop().call_later(960,self.channels.pop,token,None)
+        logging.getLogger('alli.call').info('outbound_transport_restored call_sid=%s',row.get('call_sid'))
+        return channel
 
     async def initiate(self, body, before_dial=None):
         enabled = os.getenv('OUTBOUND_CALLS_ENABLED', '').lower() == 'true'
@@ -113,38 +165,8 @@ class OutboundVoice:
                 await asyncio.to_thread(self.store.blocked, key, 'fresh_appointment_validation_failed')
                 return {'ok': False, 'request_id': body.request_id, 'status': 'blocked'}
         token = secrets.token_urlsafe(32)
-        tool = outcome_tool(key, self.store)
-        call_sid_ref = {'value': None}
-
-        @function_tool()
-        async def end_call(reason: str = 'completed') -> dict:
-            """End this call after a wrong person, refusal, or completed human conversation. Do not end voicemail greetings; the service waits for the beep. Save the outcome first when appropriate. No other phone call can be selected."""
-            if reason not in {'completed', 'wrong_person', 'refused'}:
-                return {'ok': False, 'error': 'Use completed, wrong_person, or refused'}
-            if reason == 'completed' and getattr(channel, '_alli_answered_by', None) != 'human':
-                return {'ok': False, 'error': 'Wait for answer detection; voicemail is handled by the service'}
-            sid = call_sid_ref['value']
-            if not sid:
-                row = await asyncio.to_thread(self.store.get, key)
-                sid = row.get('call_sid') if row else None
-            if not sid:
-                return {'ok': False, 'error': 'This call binding is not ready'}
-            logging.getLogger('alli.call').info('outbound_end_call call_sid=%s source=conversation_tool', sid)
-            await channel.end_call(sid)
-            return {'ok': True}
-
-        executable_tools = tools_for(body, tool)
-        session = session_for(body, self.base_session, tool, executable_tools=executable_tools)
-        session['delegation']['responses']['tools'].append(end_call.to_realtime_format())
-        session['instructions'] += '\nCALL ENDING: After recording the final outcome, use end_call to hang up. For a wrong person or refusal, use end_call with reason=wrong_person or reason=refused immediately. If you hear voicemail, stop speaking and wait for the service, rather than using end_call. It can only end this call.\n'
-        from live_observer import AlliLiveConfig
-        channel = VoiceChannel(self.tac, config=AlliLiveConfig(bound_phone=os.getenv('ALLI_OWNER_PHONE',body.phone),
-            tools=executable_tools + [end_call], default_session_config=None,
-            welcome_instruction='Speak immediately. Follow the purpose-specific OPENING in this session and then listen.'))
-        channel._alli_ledger_key = key
-        channel._alli_voicemail_message = voicemail_message(body)
-        channel._alli_voicemail_policy = body.voicemail_policy
-        channel._alli_answered_by = None
+        channel,session,call_sid_ref=self.build_channel(body,key)
+        await asyncio.to_thread(self.store.bind_transport,key,token)
         self.channels[token] = channel
         domain = os.environ.get('TWILIO_VOICE_PUBLIC_DOMAIN', '')
         try:
@@ -282,7 +304,7 @@ class OutboundVoice:
 
         @app.websocket('/outbound/ws/{token}')
         async def websocket(websocket: WebSocket, token: str, _: None = Depends(ws_sig)):
-            channel = self.channels.get(token)
+            channel = await self.resolve_channel(token,stream=True)
             if channel is None:
                 await websocket.close(code=1008)
                 return
@@ -290,7 +312,7 @@ class OutboundVoice:
 
         @app.post('/outbound/amd/{token}', dependencies=[Depends(http_sig)])
         async def amd(token: str, request: Request):
-            channel = self.channels.get(token)
+            channel = await self.resolve_channel(token)
             if channel is None: return {'ok': False, 'status': 'expired'}
             form = await request.form()
             sid = str(form.get('CallSid', ''))
@@ -333,7 +355,7 @@ class OutboundVoice:
 
         @app.post('/outbound/status/{token}', dependencies=[Depends(http_sig)])
         async def status(token: str, request: Request):
-            channel = self.channels.get(token)
+            channel = await self.resolve_channel(token)
             if channel is None: return {'ok': False, 'status': 'expired'}
             form = await request.form()
             disposition = str(form.get('CallStatus', ''))

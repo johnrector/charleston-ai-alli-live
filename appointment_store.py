@@ -68,6 +68,9 @@ def initialize() -> None:
                 ALTER TABLE alli_appointment_dispatch
                 ADD COLUMN IF NOT EXISTS voicemail jsonb
             ''')
+            db.execute('ALTER TABLE alli_appointment_dispatch ADD COLUMN IF NOT EXISTS transport_digest text')
+            db.execute('ALTER TABLE alli_appointment_dispatch ADD COLUMN IF NOT EXISTS transport_expires_at timestamptz')
+            db.execute('CREATE UNIQUE INDEX IF NOT EXISTS alli_appointment_transport ON alli_appointment_dispatch(transport_digest) WHERE transport_digest IS NOT NULL')
         # A failed commit must leave initialization retryable.
         _initialized = True
 
@@ -291,4 +294,23 @@ def find_by_call_sid(call_sid):
     initialize()
     with connection() as db:
         row = db.execute('SELECT id FROM alli_appointment_dispatch WHERE call_sid=%s', (call_sid,)).fetchone()
+    return get(row[0]) if row else None
+
+
+def bind_transport(key,token):
+    """Persist only a hash of the single-call routing token before dialing."""
+    import hashlib
+    initialize()
+    with connection() as db:
+        row=db.execute("UPDATE alli_appointment_dispatch SET transport_digest=%s,transport_expires_at=now()+interval '20 minutes' WHERE id=%s RETURNING id",(hashlib.sha256(token.encode()).hexdigest(),key)).fetchone()
+    if not row:raise ValueError('Call transport could not be saved; no call should be placed')
+
+
+def resolve_transport(token):
+    """Recover an existing call's mission; never claim or place another call."""
+    import hashlib
+    if not isinstance(token,str) or len(token)!=43:return None
+    initialize()
+    with connection() as db:
+        row=db.execute('SELECT id FROM alli_appointment_dispatch WHERE transport_digest=%s AND transport_expires_at>now()',(hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
     return get(row[0]) if row else None

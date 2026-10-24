@@ -16,6 +16,9 @@ class MemoryLedger:
         self.rows[key] = {'status':'dispatching','context':deepcopy(context),'call_sid':None,'outcome':None,'disposition':None}
         return True
     def get(self,key): return self.rows.get(key)
+    def bind_transport(self,key,token):self.rows[key]['transport_token']=token
+    def resolve_transport(self,token):
+        return next((dict(row,key=key) for key,row in self.rows.items() if row.get('transport_token')==token),None)
     def queued(self,key,sid): self.rows[key].update(status='queued',call_sid=sid); return True
     def uncertain(self,key): self.rows[key]['status']='uncertain'; return True
     def blocked(self,key,reason): self.rows[key].update(status='blocked',reason=reason); return True
@@ -68,7 +71,7 @@ def test_isolated_channel_claim_and_outcome(service,monkeypatch):
         channels.append(channel)
         assert store.rows[voice.request_key(body.request_id)]['status']=='dispatching'
         assert 'PROPERTY DEMO SECRET' not in options.session_config['instructions']
-        assert channel._provider.config.default_session_config is None
+        assert channel._provider.config.default_session_config==options.session_config
         assert set(channel._provider._tools_by_name)=={'report_call_outcome','end_call'}
         assert options.call_options.machine_detection=='DetectMessageEnd'
         assert options.call_options.timeout==60
@@ -251,3 +254,24 @@ def test_exact_expiring_intent_can_book_without_broad_enable(service,monkeypatch
         assert one['request_id']==two['request_id']=='one-meeting-intent'
     asyncio.run(run())
     assert len(captured)==1
+
+
+def test_ringing_call_restores_on_replacement_server_without_redial(service,monkeypatch):
+    voice,old,store,body=service
+    monkeypatch.setenv('OUTBOUND_CALLS_ENABLED','true')
+    dial=AsyncMock(return_value=SimpleNamespace(call_sid='CA-existing'))
+    monkeypatch.setattr(voice.VoiceChannel,'initiate_outbound_conversation',dial)
+    async def scenario():
+        await old.initiate(body)
+        token=next(iter(old.channels))
+        fresh=voice.OutboundVoice(old.tac,old.base_session,store)
+        recovered=await fresh.resolve_channel(token,stream=True)
+        assert recovered and recovered._alli_ledger_key==voice.request_key(body.request_id)
+        config=recovered._provider.config.default_session_config
+        assert body.mission in config['instructions'] and 'PROPERTY DEMO SECRET' not in config['instructions']
+        assert await fresh.resolve_channel('unknown',stream=True) is None
+        store.rows[voice.request_key(body.request_id)]['disposition']='completed'
+        another=voice.OutboundVoice(old.tac,old.base_session,store)
+        assert await another.resolve_channel(token,stream=True) is None
+    asyncio.run(scenario())
+    assert dial.await_count==1
