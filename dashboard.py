@@ -175,8 +175,9 @@ def install_dashboard(app,communications,reminders,worker):
         response=await call_next(request)
         if request.url.path.startswith('/dashboard'):
             response.headers.update({'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow',
-                'Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY',
-                'Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; media-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'"})
+                'Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff'})
+            response.headers.setdefault('X-Frame-Options','DENY')
+            response.headers.setdefault('Content-Security-Policy',"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; media-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
         return response
 
     @app.get('/dashboard',include_in_schema=False)

@@ -137,7 +137,8 @@ def install_work(app):
         return Response(bytes(artifact['content']),media_type=artifact['content_type'],headers={
           'Content-Disposition':("inline; filename*=UTF-8''" if inline else "attachment; filename*=UTF-8''")+quote(artifact['filename'],safe=''),
           'Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Robots-Tag':'noindex, nofollow','X-Content-Type-Options':'nosniff',
-          'Content-Security-Policy':("default-src 'none'; style-src 'unsafe-inline' https:; img-src https: data:; font-src https: data:; base-uri 'none'; form-action 'none'; sandbox allow-popups" if inline else "default-src 'none'; sandbox")})
+          'X-Frame-Options':'SAMEORIGIN' if inline else 'DENY',
+          'Content-Security-Policy':("default-src 'none'; style-src 'unsafe-inline' https:; img-src https: data:; font-src https: data:; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-popups" if inline else "default-src 'none'; sandbox")})
 
     @app.get('/dashboard/api/work/{wid}/files/{fid}',dependencies=[Depends(auth)],include_in_schema=False)
     async def owner_artifact(wid:str,fid:str,view:str=''):return await file_response(wid,fid,view)

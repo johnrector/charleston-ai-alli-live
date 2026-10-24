@@ -135,3 +135,20 @@ def test_default_work_parallelism_respects_memory(monkeypatch,memory,expected):
     monkeypatch.delenv('ALLI_WORK_CONCURRENCY',raising=False)
     monkeypatch.setattr(Path,'read_text',lambda _:str(memory))
     assert work_agent.work_parallelism()==expected
+
+def test_dashboard_middleware_preserves_sandboxed_article_design(monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import work_routes as routes
+    monkeypatch.setattr(routes.dashboard,'authenticate',lambda _:dict(method='cookie'))
+    artifact=dict(id='HTML',filename='article.html',content_type='text/html',content=b'<style>.art{color:navy}</style><article class="art">Designed article</article>')
+    monkeypatch.setattr(routes,'files',lambda *a,**kw:[artifact])
+    app=FastAPI();routes.dashboard.install_dashboard(app,None,None,None);routes.install_work(app)
+    client=TestClient(app)
+    article=client.get('/dashboard/api/work/ARTICLE/files/HTML?view=article')
+    csp=article.headers['content-security-policy']
+    assert article.status_code==200 and "style-src 'unsafe-inline' https:" in csp
+    assert "default-src 'none'" in csp and 'sandbox allow-popups' in csp and 'allow-scripts' not in csp and 'allow-same-origin' not in csp
+    assert article.headers['x-frame-options']=='SAMEORIGIN' and "frame-ancestors 'self'" in csp
+    dashboard=client.get('/dashboard')
+    assert "style-src 'self'" in dashboard.headers['content-security-policy'] and dashboard.headers['x-frame-options']=='DENY'
