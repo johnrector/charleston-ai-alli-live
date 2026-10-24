@@ -127,3 +127,28 @@ async def test_scheduled_delivery_continues_while_native_observation_is_blocked(
     finally:
         worker.stopping.set();release.set()
         await asyncio.wait_for(running,3)
+
+
+@pytest.mark.asyncio
+async def test_replacement_worker_waits_for_its_public_mcp_release(worker_setup,monkeypatch):
+    import asyncio,httpx
+    *_,make_worker=worker_setup
+    worker=make_worker();worker.release='new-commit'
+    old_seen,new_public,started=asyncio.Event(),asyncio.Event(),asyncio.Event()
+    def health(request):
+        old_seen.set()
+        return httpx.Response(200,json={'release':'new-commit' if new_public.is_set() else 'old-commit'})
+    real_client=httpx.AsyncClient
+    monkeypatch.setattr(httpx,'AsyncClient',lambda **kwargs:
+        real_client(transport=httpx.MockTransport(health),**kwargs))
+    async def work():started.set();worker.stopping.set()
+    worker.work_tick=work;worker.transport_tick=AsyncMock()
+    running=asyncio.create_task(worker.run())
+    try:
+        await asyncio.wait_for(old_seen.wait(),2)
+        assert not started.is_set() and worker.transport_tick.await_count==0
+        new_public.set()
+        await asyncio.wait_for(started.wait(),3)
+    finally:
+        worker.stopping.set()
+        await asyncio.wait_for(running,3)

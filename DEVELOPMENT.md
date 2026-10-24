@@ -55,21 +55,36 @@ independently of native session observation; a blocked AI request cannot delay
 an already authorized text. Paid readiness probes are explicit diagnostics;
 normal restarts do not require them. Active-call cutover protection remains.
 
-Latest local suite: **82 passed**, with isolated real Postgres, authenticated
+Latest local suite: **83 passed**, with isolated real Postgres, authenticated
 MCP HTTP, actual SDK schema/event validation, durable state, cryptography and
 blocked-reasoner/scheduled-delivery concurrency. Check Render's commit against
 Git before claiming these latest changes live.
+
+5320bc6d2041bbbfac16ac30e48039e6f286abbd reached production at 22:15 UTC;
+health and compact read receipts were verified. Its later call report was
+delivered after the credit refill. A replacement worker had started before
+public traffic switched, so its context lookup still reached the old release
+and missed the newly exposed action receipts. The next release gates workers
+on the public health endpoint's matching Render commit. The old release keeps
+serving during preparation; the new worker waits until its tools are public.
+This boundary has an isolated old/new-release HTTP test.
 
 ## Remaining live gates
 
 1. Verify the latest reliability commit through Render MCP and public health.
 2. Verify the pending call mission reports actual partial results after the
    credit refill, without redialing or repeating its completed email.
-3. Test a real incoming call on the clean deployment and final text after
-   hangup. Earlier incoming calls were against the old runtime.
-4. Confirm actual iPhone dashboard session persistence across result links.
-   Twelve-hour server persistence, redirects and cooldown/code-entry behavior
-   passed automated tests; that is not an actual Safari persistence test.
+3. Final smoke test after the release-coordination change: cloud delegation
+   through the owner MCP, its model/reasoning settings and actual phone delivery.
+
+The real incoming call passed at 22:17 UTC: verified owner number, 16-second
+two-way conversation, native Live finalized, calendar-backed checklist work
+continued after hangup and actual SMS delivery was confirmed. The owner also
+confirmed the iPhone remained signed in across closing and reopening twice.
+The sign-in expires 12 hours after authentication and persists across restarts.
+The checklist run sent both the checklist and a status text; work instructions
+now tell the model to suppress a redundant notification when the whole requested
+result has already been delivered, while still reporting unresolved work.
 
 ## Operations
 

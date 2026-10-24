@@ -6,6 +6,7 @@ process does not lose an assignment or create a replacement native agent.
 import asyncio
 import json
 import logging
+import httpx
 
 from twilio.base.exceptions import TwilioRestException
 
@@ -16,11 +17,12 @@ log=logging.getLogger(__name__)
 
 
 class Worker:
-    def __init__(self,repository,runtime,outbox,carrier,base_url,*,calls=None,computer=None):
+    def __init__(self,repository,runtime,outbox,carrier,base_url,*,calls=None,computer=None,release=''):
         self.repository,self.runtime,self.outbox,self.carrier=repository,runtime,outbox,carrier
         self.base_url=base_url.rstrip('/')
         self.calls=calls
         self.computer=computer
+        self.release=release
         self.stopping=asyncio.Event()
 
     async def dispatch(self,task):
@@ -192,9 +194,27 @@ class Worker:
                 log.warning('forward conversation work=%s error=%s',work['id'],type(error).__name__)
 
     async def run(self):
+        if not await self.wait_for_public_release():return
         # A slow/blocked reasoning provider cannot delay an already scheduled
         # text, call intent or completion notification. Both use durable claims.
         await asyncio.gather(self._poll(self.work_tick,2),self._poll(self.transport_tick,1))
+
+    async def wait_for_public_release(self):
+        if not self.release:return True
+        # Render starts the replacement before switching public MCP traffic.
+        # Do not dispatch a new release's work into the previous release's tools.
+        async with httpx.AsyncClient(timeout=5,follow_redirects=False) as client:
+            while not self.stopping.is_set():
+                try:
+                    response=await client.get(self.base_url+'/healthz',headers={'Cache-Control':'no-cache'})
+                    if response.status_code==200 and response.json().get('release')==self.release:
+                        log.warning('public_release_ready=%s',self.release)
+                        return True
+                except (httpx.HTTPError,ValueError):
+                    pass
+                try:await asyncio.wait_for(self.stopping.wait(),timeout=1)
+                except asyncio.TimeoutError:pass
+        return False
 
     async def _poll(self,step,interval):
         while not self.stopping.is_set():

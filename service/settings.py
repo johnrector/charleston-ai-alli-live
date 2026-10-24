@@ -19,6 +19,7 @@ class Settings:
     sender_email:str=''
     background:bool=True
     native_probe:bool=False
+    release:str=''
 
     @classmethod
     def from_environment(cls):
@@ -29,7 +30,8 @@ class Settings:
             session_secret=os.environ['DEMO_KEY'],google_key=os.environ['GOOGLE_TOKEN_ENCRYPTION_KEY'],
             owner_email=os.environ['GOOGLE_OWNER_EMAIL'],
             sender_email=os.environ.get('GOOGLE_SENDER_EMAIL',os.environ['GOOGLE_OWNER_EMAIL']),
-            native_probe=os.environ.get('ALLI_RUN_STARTUP_PROBE','').lower() in {'1','true'})
+            native_probe=os.environ.get('ALLI_RUN_STARTUP_PROBE','').lower() in {'1','true'},
+            release=os.environ.get('RENDER_GIT_COMMIT',''))
 
 
 def load_profile():

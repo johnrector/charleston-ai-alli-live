@@ -52,7 +52,8 @@ def create_application(settings,repository,carrier,google,api):
     sessions=OwnerSessions(repository,settings.session_secret)
     runtime=ManagedRuntime(api,repository.profile,repository)
     computer=Computer.configured(repository,api)
-    worker=Worker(repository,runtime,outbox,carrier,settings.base_url,calls=calls,computer=computer)
+    worker=Worker(repository,runtime,outbox,carrier,settings.base_url,calls=calls,computer=computer,
+                  release=settings.release)
     tools=tool_http_app(create_tool_server(repository,settings.base_url,
         google=google,deliveries=outbox,calls=calls,carrier=carrier,computer=computer),settings.base_url)
     oauth=OwnerOAuth(repository,settings.base_url,settings.session_secret,settings.google_key.encode())
@@ -143,8 +144,10 @@ def create_application(settings,repository,carrier,google,api):
     @app.get('/healthz')
     @app.get('/health')
     async def health():
-        return {'ok':True,'runtime':'native_openai','configured_voice_model':repository.profile.voice_model,
-                'configured_work_model':repository.profile.work_model,'reasoning':repository.profile.reasoning_effort}
+        return JSONResponse({'ok':True,'runtime':'native_openai','release':settings.release,
+            'configured_voice_model':repository.profile.voice_model,
+            'configured_work_model':repository.profile.work_model,'reasoning':repository.profile.reasoning_effort},
+            headers={'Cache-Control':'no-store'})
 
     @app.post('/executor/lease')
     async def lease(request:Request):

@@ -83,6 +83,9 @@ and sends the appropriate follow-up.
 Your final structured report describes the work, not merely this conversation
 turn. Use completed only when the delegated outcome is achieved; partial for
 unresolved work or failures; waiting when essential input or a pending action is
-needed. List every unresolved item in remaining. Set notify false only when no
-follow-up is needed, such as a review finding no unfulfilled caller request.
+needed. List every unresolved item in remaining. Set notify false when no
+follow-up is needed, including when the complete requested result has already
+been delivered to the requester by a verified text. Do not send a second text
+merely announcing that the first text was sent. Still notify about unresolved
+work or a failed delivery. A review finding no unfulfilled request needs no text.
 """
