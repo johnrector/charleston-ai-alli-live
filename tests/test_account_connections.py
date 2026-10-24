@@ -80,6 +80,9 @@ async def test_connection_forms_require_owner_origin_csrf_and_use_pkce(setup):
         meta=(await http.get('/connections/shopify/client.json')).json()
         assert meta['client_id']==links.shopify_client_id and meta['token_endpoint_auth_method']=='none'
         http.cookies.set('alli_owner_session',cookie)
+        account_page=await http.get('/dashboard/connections')
+        policy=account_page.headers['content-security-policy']
+        assert "form-action 'self' https://accounts.google.com https://setup.shopify.com;" in policy
         assert (await http.post('/dashboard/connections/google/connect',data={'csrf':sessions.csrf(cookie)})).status_code==403
         for provider in ('google','shopify'):
             response=await http.post('/dashboard/connections/'+provider+'/connect',

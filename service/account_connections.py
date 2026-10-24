@@ -36,10 +36,19 @@ def account_router(settings,repository,sessions,connections,google,api):
             content+='<section><h2>'+label+'</h2><p>'+description+'</p><p>'
             content+=('Authorized: '+e(linked.get('account') or linked.get('store') or '')+
                       ' · '+e(linked.get('verified_at',''))) if linked else 'Additional cloud authorization needed.'
+            if provider=='shopify' and not linked:
+                content+='</p><p>The store-app connection is being completed.</p></section>'
+                continue
             content+='</p><form method="post" action="/dashboard/connections/'+provider+'/connect">'
             content+='<input type="hidden" name="csrf" value="'+e(sessions.csrf(request.cookies.get(SESSION,'')))+'">'
             content+='<button>'+('Reconnect ' if linked else 'Connect ')+label+'</button></form></section>'
-        return page('Connections',content)
+        response=page('Connections',content)
+        # Browsers apply form-action to the POST's redirect as well. Keep
+        # unrelated dashboard forms restricted to self; authorize these exact
+        # provider origins only on the connection page.
+        response.headers['Content-Security-Policy']=response.headers['Content-Security-Policy'].replace(
+            "form-action 'self';","form-action 'self' https://accounts.google.com https://setup.shopify.com;")
+        return response
 
     def google_flow(state,verifier):
         tokens=google.tokens
