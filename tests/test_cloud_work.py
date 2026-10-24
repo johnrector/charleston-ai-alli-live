@@ -145,16 +145,17 @@ def test_call_tool_needs_actual_owner_and_explicit_request(monkeypatch):
 
 def test_explicit_owner_call_has_stable_intent_and_honest_status(monkeypatch):
     monkeypatch.setenv('ALLI_OWNER_PHONE',OWNER)
-    calls=NS(initiate=AsyncMock(return_value={'ok':True,'status':'queued'}));monkeypatch.setattr(agent,'call_executor',calls)
-    tool=next(t for t in agent.owner_call_tools(OWNER,SID) if t.name=='call_person')
+    calls=NS(initiate=AsyncMock());monkeypatch.setattr(agent,'call_executor',calls)
+    create=Mock(return_value=dict(ok=True,work_id='QUEUED-WORK',state='queued'));monkeypatch.setattr(jobs,'create',create)
+    tool=next(t for t in agent.owner_call_tools(OWNER,SID,source_request='Call Jane and ask about meeting focus') if t.name=='call_person')
     async def run():
         for _ in range(2):
             result=await tool(phone_number=FRIEND,recipient_name='Jane',mission='Ask about meeting focus',owner_requested=True)
-            assert result['status']=='queued'
+            assert result['state']=='queued'
     asyncio.run(run())
-    bodies=[call.args[0] for call in calls.initiate.call_args_list]
-    assert bodies[0].request_id==bodies[1].request_id
-    assert bodies[0].phone==FRIEND
+    assert create.call_args_list[0].args[4]==create.call_args_list[1].args[4]
+    assert create.call_args.kwargs['context']['delegation_source']=='Call Jane and ask about meeting focus'
+    calls.initiate.assert_not_awaited()
 
 
 def test_private_result_link_is_bound_to_phone_job_and_expiry(monkeypatch):

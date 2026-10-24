@@ -155,6 +155,10 @@ def tools(phone,sid,session_reader,group_state,number_verified=False):
         session=session_reader() if session_reader else None
         if session is None:return dict(ok=False,error='Group notes require the live voice session')
         group_state['active']=True;session.metadata['group_mode']=True
+        if session.metadata.get('suppress_transcript_persistence'):
+            restart=len(session.metadata.get('live_transcript_fragments',session.metadata.get('transcript',[])))
+            session.metadata['transcript_persist_start']=restart
+            session.metadata['group_fragment_start']=restart
         session.metadata.setdefault('group_fragment_start',len(session.metadata.get('live_transcript_fragments',session.metadata.get('transcript',[]))))
         session.metadata['suppress_transcript_persistence']=False
         try:

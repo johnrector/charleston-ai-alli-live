@@ -29,6 +29,8 @@ LIMITS={
  'inbound_voice':(80,(20,10,2),10),
  'voice_seconds':(7200,(3600,1800,240),7200),
  'outbound_voice':(20,(20,0,0),5),
+ 'call_request':(20,(20,2,0),5),
+ 'return_call':(20,(10,2,0),5),
  'outbound_sms':(400,(120,40,2),60),
  'outbound_segments':(1600,(960,120,8),240),
  'approval_alert':(20,(20,1,1),5),

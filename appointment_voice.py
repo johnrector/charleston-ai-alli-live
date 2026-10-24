@@ -137,7 +137,8 @@ class OutboundVoice:
         session = session_for(body, self.base_session, tool, executable_tools=executable_tools)
         session['delegation']['responses']['tools'].append(end_call.to_realtime_format())
         session['instructions'] += '\nCALL ENDING: After recording the final outcome, use end_call to hang up. For a wrong person or refusal, use end_call with reason=wrong_person or reason=refused immediately. If you hear voicemail, stop speaking and wait for the service, rather than using end_call. It can only end this call.\n'
-        channel = VoiceChannel(self.tac, config=GPTLiveProviderConfig(
+        from live_observer import AlliLiveConfig
+        channel = VoiceChannel(self.tac, config=AlliLiveConfig(bound_phone=os.getenv('ALLI_OWNER_PHONE',body.phone),
             tools=executable_tools + [end_call], default_session_config=None,
             welcome_instruction='Speak immediately. Follow the purpose-specific OPENING in this session and then listen.'))
         channel._alli_ledger_key = key
@@ -178,8 +179,9 @@ class OutboundVoice:
         row = await asyncio.to_thread(self.store.find_by_call_sid, sid)
         if not row or row.get('outcome') is not None:
             return
+        fragments=session.metadata.get('live_transcript_fragments') or session.metadata.get('transcript', [])[-100:]
         transcript = [{'role': t.get('role'), 'text': str(t.get('text', ''))[:12000]}
-                      for t in session.metadata.get('transcript', [])[-100:]
+                      for t in fragments
                       if t.get('role') in ('user', 'assistant') and t.get('text')]
         outcome = {'source': 'call_end_transcript', 'attendance': 'unclear',
                    'questions': [], 'follow_up_needed': True,

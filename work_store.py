@@ -9,7 +9,7 @@ from psycopg.types.json import Jsonb
 import communication_store as store
 import scheduled_sms as sms
 
-FIELDS = 'id,phone,contact_name,scope,title,instruction,state,response_id,result,sources,error,outbound_id,notify,link_revoked,private_result,internal,created_at,updated_at'
+FIELDS = 'id,phone,contact_name,scope,title,instruction,state,response_id,result,sources,error,outbound_id,notify,link_revoked,private_result,internal,created_at,updated_at,available_at,completed_at'
 STATES = ('queued','running','waiting','needs_john','completed','partial','blocked','cancelled')
 
 def initialize(db):
@@ -24,6 +24,8 @@ def initialize(db):
     db.execute('ALTER TABLE alli_work ADD COLUMN IF NOT EXISTS link_revoked boolean NOT NULL DEFAULT false')
     db.execute('ALTER TABLE alli_work ADD COLUMN IF NOT EXISTS private_result boolean NOT NULL DEFAULT false')
     db.execute('ALTER TABLE alli_work ADD COLUMN IF NOT EXISTS internal boolean NOT NULL DEFAULT false')
+    db.execute('ALTER TABLE alli_work ADD COLUMN IF NOT EXISTS available_at timestamptz NOT NULL DEFAULT now()')
+    db.execute('ALTER TABLE alli_work ADD COLUMN IF NOT EXISTS completed_at timestamptz')
     db.execute('CREATE INDEX IF NOT EXISTS alli_work_phone_history ON alli_work(phone,created_at DESC)')
     db.execute('''CREATE TABLE IF NOT EXISTS alli_work_file (
       id text PRIMARY KEY,work_id text NOT NULL REFERENCES alli_work(id),filename text NOT NULL,
@@ -121,8 +123,8 @@ def claim():
                   message='Alli: I hit an interruption with '+title+'. Your request is saved for review; I have not treated it as completed. Reply here for an update.'))
         # One cross-deploy worker owns a job; fresh running jobs are not re-claimed.
         db.execute('SELECT pg_advisory_xact_lock(301849630181)')
-        row=db.execute("""SELECT id FROM alli_work WHERE state='queued' OR
-          (state='running' AND response_id IS NOT NULL AND updated_at<now()-interval '2 minutes')
+        row=db.execute("""SELECT id FROM alli_work WHERE available_at<=now() AND (state='queued' OR
+          (state='running' AND response_id IS NOT NULL AND updated_at<now()-interval '2 minutes'))
           ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
         if not row:return None
         db.execute("UPDATE alli_work SET state='running',updated_at=now() WHERE id=%s",row)
@@ -146,7 +148,8 @@ def result_url(job):
 def valid_token(job,token):
     if not job or job.get('link_revoked') or not hmac.compare_digest(result_token(job),token):return False
     if __import__('security_controls').blocked(job['phone']):return False
-    created=datetime.fromisoformat(job['created_at']) if isinstance(job['created_at'],str) else job['created_at']
+    stamp=job.get('completed_at') or job['created_at']
+    created=datetime.fromisoformat(stamp) if isinstance(stamp,str) else stamp
     return created>datetime.now(timezone.utc)-timedelta(days=7)
 
 def cached_file(wid,key):
@@ -183,7 +186,7 @@ def finish(wid,result,sources,files,*,outcome='completed'):
             db.execute('INSERT INTO alli_work_file(id,work_id,filename,content_type,content) VALUES(%s,%s,%s,%s,%s)',
               (secrets.token_hex(8),wid,filename,mimetypes.guess_type(filename)[0] or 'application/octet-stream',f['content']))
         if outcome not in ('completed','partial','blocked'):raise ValueError('Invalid final outcome')
-        db.execute("UPDATE alli_work SET state=%s,result=%s,sources=%s,error='',updated_at=now() WHERE id=%s",(outcome,result[:60000],Jsonb(sources),wid))
+        db.execute("UPDATE alli_work SET state=%s,result=%s,sources=%s,error='',completed_at=coalesce(completed_at,now()),updated_at=now() WHERE id=%s",(outcome,result[:60000],Jsonb(sources),wid))
         artifact_count=db.execute('SELECT count(*) FROM alli_work_file WHERE work_id=%s',(wid,)).fetchone()[0]
         event(db,wid,outcome,dict(artifact_count=artifact_count,source_count=len(sources)))
         if job[4]:

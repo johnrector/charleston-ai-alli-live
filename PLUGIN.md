@@ -475,3 +475,22 @@ real delegation for live availability, sending, changes and actual work.
 Say "Checking" only with real backend work. Recheck time-sensitive public facts
 when the profile is older than 30 days. Do not turn a personal meeting into a
 paid service merely because the lab's published rates are known.
+
+## Durable phone assignments and owner controls — October 24, 2026
+
+Phone-delegated calls now enter the persistent cloud work queue. The cloud worker
+uses the existing GPT-Live dispatcher, waits for its actual outcome, and delivers
+the result without depending on a live call or Mac. Request IDs prevent redials.
+Explicit future calls can wait up to 14 days without occupying a worker lane.
+Friend requests to call another person require an exact action approval; a
+verified saved friend can explicitly request a callback to their own number.
+Calls never authorize payments, deposits, purchases, security changes or new
+financial/legal commitments. Twilio remains transport; OpenAI owns conversation
+and reasoning. Account tools exposed to phone work remain Google productivity
+only; installed connections do not grant blanket phone access. Private skill
+snapshots are mounted for owner work only, never friend or group jobs.
+
+People is the owner contact manager: add/edit, suspend/reactivate, recoverable
+delete/restore, conversation/activity sorting, per-person calls/texts and work
+receipts. Suspension cancels pending work and unsent scheduled messages; restore
+does not replay them. See Desktop/Alli/RELEASE NOTES.md for deployed evidence.

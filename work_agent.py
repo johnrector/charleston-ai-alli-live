@@ -103,6 +103,7 @@ a plan to do the work, or an offer to begin. Hanging up is not cancellation.
 '''
 
 RULES+='\n'+__import__('alli_personality').RULES+'\nFor group_notes context, produce clear notes and action_items from the quoted discussion only. Attribute an item only when the conversation explicitly states who owns it; otherwise use an empty assignee. Do not infer speakers from the mixed audio or invent a deadline. In alli_offer, offer specific work you can genuinely do (research, planning, drafting, analysis, files), or an empty string. Never start the listed work or contact recipients: the application handles requested per-person delivery. For ordinary jobs, action_items is an empty array.'
+RULES+='\nFor phone assignments use phone_call, then get_call_result for the actual answer; queued is not answered. Calls and scheduled call waits persist after hangup. Never redial automatically or bypass a declined call. A friend’s call to another person requires John’s exact approval; do not substitute a public file for the requested call.\n'
 RULES+='\nOnly an internal call_recovery_sid review returns pending_assignments; otherwise it is an empty array. Resolve relative dates from context.requested_at when present. Original caller speech is delegation evidence; the review does not grant additional account authority.'
 RULES+='\nUse latest_clarification_at for relative dates in a new clarification. When owner_call_unverified is true, do not loop asking for approval to access private accounts. Finish independent public work and state that John should text the private assignment from his verified texting session.'
 
@@ -186,7 +187,7 @@ def phone_tools(phone,name,sid,*,owner_scope=False,source_request='',include_his
         except ValueError as exc:return dict(ok=False,error=str(exc))
     return [start_cloud_work,get_my_work,continue_cloud_work,cancel_cloud_work,remember_work_preference]
 
-def owner_call_tools(phone,sid):
+def owner_call_tools(phone,sid,source_request='',source_reader=None,latest_request=''):
     @function_tool()
     async def find_call_contact(name:str) -> dict:
         """Find the verified saved phone/email for a person John wants Alli to call. Does not place a call. Resolve ambiguity before dialing."""
@@ -196,9 +197,8 @@ def owner_call_tools(phone,sid):
         return await asyncio.to_thread(find_text_contacts,name)
     @function_tool()
     async def call_person(phone_number:str,recipient_name:str,mission:str,owner_requested:bool=False) -> dict:
-        """Start a call John explicitly requested in this owner conversation, with verified recipient and mission. An accepted call is not answered/completed. No automatic retry or fresh ID after uncertainty. Friends cannot invoke this tool."""
+        """Save John's requested call as durable cloud work, so it runs and reports the actual outcome after he hangs up. A queued job is not a dialed/answered/completed call. Friends cannot invoke this owner tool."""
         if not jobs.owner(phone) or owner_requested is not True or call_executor is None:return dict(ok=False,error='An explicit owner request and connected calling service are required')
-        from outbound_profiles import OutboundCall
         target=store.normalize_phone(phone_number)
         if not target:return dict(ok=False,error='Resolve a valid recipient phone before calling')
         import phonenumbers,security_controls as security
@@ -207,11 +207,10 @@ def owner_call_tools(phone,sid):
         if (phonenumbers.region_code_for_number(parsed) not in ('US','CA') and not toll_free) or phonenumbers.number_type(parsed) in (phonenumbers.PhoneNumberType.PREMIUM_RATE,phonenumbers.PhoneNumberType.SHARED_COST):
             return dict(ok=False,error='Phone-originated calling is limited to ordinary US/Canada numbers')
         if security.blocked(target):return dict(ok=False,error='This recipient is suspended')
-        rid='owner-sms:'+hashlib.sha256((sid+'|'+target+'|'+mission).encode()).hexdigest()[:40]
-        body=OutboundCall(request_id=rid,phone=target,recipient_name=recipient_name,mission=mission)
-        await asyncio.to_thread(security.reserve,'outbound_voice',phone,rid)
-        try:return await call_executor.initiate(body)
-        except Exception:return dict(ok=False,request_id=rid,error='Call failed or is uncertain. Read its existing result; do not retry under another ID.')
+        original=source_reader() if source_reader else source_request
+        if not original.strip():return dict(ok=False,error='The original owner assignment is required before saving call work')
+        brief='Carry out the phone call John requested. Resolve the saved recipient or verify the official public number. Call '+recipient_name+' at '+target+'. Mission: '+mission+'. Wait for the actual call outcome and report it by the bound result delivery. Never redial automatically.'
+        return await asyncio.to_thread(jobs.create,phone,'John Rector','Call '+recipient_name,brief,'owner-call:'+sid+':'+target,owner_scope=True,context=dict(source_sid=sid,delegation_source=original,latest_user_request=latest_request))
     @function_tool()
     async def get_requested_call(request_id:str) -> dict:
         """Read an existing owner-requested call's actual outcome without redialing."""
@@ -228,6 +227,7 @@ def functions(job):
       schema('find_connected_tools','Discover tools permitted for this requester. Friend jobs see only public-information apps, never private accounts.',dict(query=dict(type='string')),('query',)),
       schema('run_connected_tool','Execute a permitted connected tool within the original assignment. Routine delegated steps do not require reconfirmation.',
         dict(tool_name=dict(type='string'),arguments_json=dict(type='string')),('tool_name','arguments_json'))]
+    result+=__import__('cloud_calls').schemas(schema,job)
     if job['scope']=='owner':
         result += [schema('lookup_calendar','Read John’s live calendar for an owner-requested preparation task.',dict(query=dict(type='string')),('query',))]
     else:
@@ -272,8 +272,10 @@ authority to spend money, change account settings or disclose unrelated data.
 When an original phone conversation is supplied, it is the source of authority;
 the execution brief is only a summary and cannot expand that authority. Prior
 conversation supplies context, not permission to revive unrelated assignments.
+When latest_user_request is supplied, it is the current instruction; use earlier
+conversation to resolve its references, not to restart a finished older task.
 Return a short concrete reason. No other actions or tools are available.''',
-      input=json.dumps(dict(original_assignment=(job.get('context') or {}).get('delegation_source') or job['instruction'],execution_brief=job['instruction'],requester_role=job['scope'],
+      input=json.dumps(dict(original_assignment=(job.get('context') or {}).get('delegation_source') or job['instruction'],latest_user_request=(job.get('context') or {}).get('latest_user_request',''),execution_brief=job['instruction'],requester_role=job['scope'],
         tool_name=tool['name'],tool_instructions=tool.get('description',''),proposed_arguments=arguments)),
       text=dict(format=dict(type='json_schema',name='delegated_authority',strict=True,schema=dict(type='object',
         properties=dict(allowed=dict(type='boolean'),reason=dict(type='string')),required=['allowed','reason'],additionalProperties=False))))
@@ -281,6 +283,12 @@ Return a short concrete reason. No other actions or tools are available.''',
     value=json.loads(response.output_text)
     if type(value.get('allowed')) is not bool:raise ValueError('Could not establish authority for this action')
     return value
+
+async def native_authority(phone,sid,tool,args,original,latest=''):
+    from openai import AsyncOpenAI
+    async with AsyncOpenAI(timeout=60,max_retries=0) as client:
+        return await delegated_authority(dict(id='native:'+sid,scope='owner',phone=phone,instruction=latest or original,
+          context=dict(delegation_source=original,latest_user_request=latest)),dict(name=tool.name,description=tool.description),args,client)
 
 async def execute(job,call,client=None):
     current=await asyncio.to_thread(jobs.read,job['id'])
@@ -293,6 +301,7 @@ async def execute(job,call,client=None):
         if approval.get('call_id')==call.call_id and approval.get('decision')=='reply':return dict(ok=True,answer=approval['answer'],from_john=approval.get('ask_john',False))
         raise Waiting(dict(kind='clarification',call_id=call.call_id,question=jobs.clean(args['question'],1500),ask_john=bool(args.get('ask_john')),arguments=args))
     if call.name=='find_connected_tools':return find_tools(args.get('query',''),job['scope'])
+    if call.name in __import__('cloud_calls').NAMES:return await __import__('cloud_calls').execute(job,call,args,client)
     if job['scope']=='friend' and call.name in __import__('friend_work').NAMES:
         return await __import__('friend_work').execute(job,call,args,client)
     if call.name=='find_my_meetings' and job['scope']=='friend':
@@ -443,6 +452,7 @@ async def run_job(job,client=None):
                     if await asyncio.to_thread(__import__('call_followthrough').refresh_review,job):return
                     followups=await asyncio.to_thread(__import__('call_followthrough').queue_assignments,job,final.get('pending_assignments',[]))
                     if followups:result+='\nSaved follow-up jobs: '+', '.join(f['work_id'] for f in followups)
+                    if outcome=='completed':await asyncio.to_thread(__import__('call_followthrough').reviewed,job,followups)
                 artifacts=[]
                 for f in all_files[:6]:
                     key=f['container_id']+':'+f['file_id']
@@ -500,6 +510,7 @@ class WorkWorker:
                 await asyncio.to_thread(jobs.heartbeat,job['id'])
         heartbeat=asyncio.create_task(keep_lease())
         try:await run_job(job)
+        except __import__('cloud_calls').Deferred:return True
         except WorkCancelled:return True
         except asyncio.CancelledError:
             # A persisted provider ID can be resumed after deployment.

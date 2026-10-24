@@ -285,3 +285,117 @@ def test_private_skill_snapshot_is_not_mounted_for_friends_or_groups(monkeypatch
     environment=next(t['environment'] for t in tools if t['type']=='shell')
     assert bool(environment.get('skills')) is should_mount
     assert bool(mount.await_count) is should_mount
+
+
+def test_resuming_notes_does_not_restore_paused_discussion(monkeypatch):
+    live=NS(metadata=dict(suppress_transcript_persistence=True,group_fragment_start=1,live_transcript_fragments=[dict(role='user',text='PRIVATE PAUSED DISCUSSION')]*3))
+    monkeypatch.setattr(notes,'start',lambda *a:dict(ok=True))
+    state={'active':True}
+    asyncio.run(notes.tools(CALLER,SID,lambda:live,state)[0](participants_json='[]'))
+    assert live.metadata['transcript_persist_start']==3
+    assert live.metadata['group_fragment_start']==3
+    assert state['active']
+
+
+def test_native_owner_write_uses_current_actual_request(monkeypatch):
+    monkeypatch.setattr(owner_access,'authorized',lambda *a:True)
+    checker=AsyncMock(return_value=dict(allowed=False,reason='A schedule lookup does not authorize a text'))
+    monkeypatch.setattr(work_agent,'native_authority',checker)
+    source='Show my schedule today'
+    _,tools=asyncio.run(inbound.build_session(BASE,{},SID,OWNER,'sms',Memory(),owner_text=source,current_request=source))
+    result=asyncio.run(next(t for t in tools if t.name=='text_contact')(phone_number=CALLER,recipient_name='Jane',message='Unrequested',send_at='',owner_requested=True))
+    assert result['performed'] is False
+    assert checker.call_args.args[-2:]==(source,source)
+
+
+@pytest.fixture
+def call_boundary(monkeypatch):
+    import cloud_calls
+    db=Mock();db.execute.return_value.fetchone.return_value=None
+    monkeypatch.setattr(cloud_calls.store,'connection',lambda:connection(db))
+    monkeypatch.setattr(cloud_calls.security,'reserve',lambda *a,**k:None)
+    monkeypatch.setattr(cloud_calls.security,'reserve_in_db',lambda *a,**k:None)
+    monkeypatch.setattr(cloud_calls.jobs,'event',Mock())
+    monkeypatch.setattr(cloud_calls.store,'notify',Mock())
+    monkeypatch.setattr(cloud_calls.jobs,'read',lambda wid:dict(state='running'))
+    monkeypatch.setattr(cloud_calls,'ordinary_call',AsyncMock(return_value=dict(safe=True,reason='Ordinary call')))
+    calls=NS(initiate=AsyncMock(return_value=dict(ok=True,status='queued',request_id='accepted')),read_result=AsyncMock(return_value=dict(ok=True,status='queued',disposition='in-progress')))
+    monkeypatch.setattr(work_agent,'call_executor',calls)
+    monkeypatch.setattr(work_agent,'delegated_authority',AsyncMock(return_value=dict(allowed=True,reason='Original call requested')))
+    return cloud_calls,calls,db
+
+
+def call_args():return dict(phone_number=CALLER,recipient_name='Jane Doe',mission='Ask what to focus on at the meeting',phone_source_url='',not_before='')
+
+
+def test_background_friend_call_requires_exact_owner_approval(call_boundary):
+    module,calls,db=call_boundary
+    job=dict(id='JOB',scope='friend',phone='+18435550101',contact_name='Other friend',instruction='Call Jane about meeting focus',context={})
+    call=NS(name='phone_call',call_id='C')
+    with pytest.raises(work_agent.Waiting) as wait:asyncio.run(module.execute(job,call,call_args(),object()))
+    assert wait.value.approval['kind']=='tool'
+    assert wait.value.approval['arguments']==call_args()
+    calls.initiate.assert_not_awaited()
+
+
+def test_background_approved_call_does_not_promote_friend_job(call_boundary):
+    module,calls,db=call_boundary;args=call_args()
+    job=dict(id='JOB',scope='friend',phone='+18435550101',contact_name='Other friend',instruction='Call Jane',context={},approval=dict(kind='tool',call_id='C',decision='approved',arguments=args))
+    result=asyncio.run(module.execute(job,NS(name='phone_call',call_id='C'),args,object()))
+    assert result['status']=='queued' and job['scope']=='friend'
+    body=calls.initiate.call_args.args[0]
+    assert body.phone==CALLER and body.capabilities==[]
+    assert body.request_id.startswith('work-call:JOB:')
+
+
+def test_background_owner_call_runs_without_another_confirmation(call_boundary):
+    module,calls,db=call_boundary;args=call_args()
+    job=dict(id='JOB',scope='owner',phone=OWNER,contact_name='John Rector',instruction='Call Jane at '+CALLER,context={})
+    result=asyncio.run(module.execute(job,NS(name='phone_call',call_id='C'),args,object()))
+    assert result['status']=='queued'
+    calls.initiate.assert_awaited_once()
+
+
+def test_in_progress_call_defers_without_notifying_or_redial(call_boundary,monkeypatch):
+    module,calls,db=call_boundary
+    deferred=Mock(side_effect=module.Deferred());monkeypatch.setattr(module,'defer',deferred)
+    job=dict(id='JOB',scope='owner',phone=OWNER,instruction='Call Jane',context={})
+    with pytest.raises(module.Deferred):asyncio.run(module.execute(job,NS(name='get_call_result'),dict(request_id='work-call:JOB:target'),object()))
+    deferred.assert_called_once_with('JOB');calls.initiate.assert_not_awaited()
+
+
+def test_phone_result_cannot_read_another_job(call_boundary):
+    module,calls,db=call_boundary
+    with pytest.raises(ValueError,match='belonging'):
+        asyncio.run(module.execute(dict(id='JOB'),NS(name='get_call_result'),dict(request_id='work-call:OTHER:target'),object()))
+    calls.read_result.assert_not_awaited()
+
+
+def test_financial_call_is_rejected_before_owner_approval_request(call_boundary,monkeypatch):
+    module,calls,db=call_boundary
+    monkeypatch.setattr(module,'ordinary_call',AsyncMock(return_value=dict(safe=False,reason='No bill payments')))
+    result=asyncio.run(module.execute(dict(id='JOB',scope='friend',phone=CALLER),NS(name='phone_call',call_id='C'),call_args(),object()))
+    assert result['status']=='not_permitted' and result['performed'] is False
+    calls.initiate.assert_not_awaited()
+
+
+def test_saved_sender_self_callback_stays_bound_to_verified_phone():
+    import cloud_calls
+    job=dict(phone=CALLER,context=dict(origin=dict(channel='voice',number_verified=True)))
+    assert cloud_calls.self_callback(job,CALLER)
+    assert not cloud_calls.self_callback(job,OWNER)
+    job['context']['group_delegation']=True
+    assert not cloud_calls.self_callback(job,CALLER)
+
+
+def test_calling_service_cannot_dial_itself(monkeypatch):
+    import cloud_calls
+    monkeypatch.setenv('TWILIO_PHONE_NUMBER',CALLER)
+    with pytest.raises(ValueError,match='own service'):cloud_calls.target_number(CALLER)
+
+
+def test_result_expiry_starts_when_scheduled_work_finishes(monkeypatch):
+    monkeypatch.setattr(work_store,'result_token',lambda job:'token')
+    now=datetime.now(timezone.utc)
+    job=dict(id='J',phone=CALLER,created_at=now-__import__('datetime').timedelta(days=12),completed_at=now)
+    assert work_store.valid_token(job,'token')

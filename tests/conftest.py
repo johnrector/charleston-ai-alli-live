@@ -4,11 +4,13 @@ Hardening tests opt out and exercise the real access boundaries explicitly.
 No behavior here is imported by the application.
 """
 import pytest
+from unittest.mock import AsyncMock
 
 @pytest.fixture(autouse=True)
 def isolated_boundary_services(request,monkeypatch):
     if request.node.path.name=='test_hardening.py':return
     import security_controls as security,owner_access,public_profile,contact_events,conference_notes
+    monkeypatch.setattr(__import__('work_agent'),'native_authority',AsyncMock(return_value=dict(allowed=True,reason='Isolated established owner assignment')))
     for name in ('reserve','reserve_in_db','reserve_sms','model','settle_model','settle_work','finish_voice','calendar_write'):
         monkeypatch.setattr(security,name,lambda *a,**k:None)
     monkeypatch.setattr(security,'blocked',lambda p:False)

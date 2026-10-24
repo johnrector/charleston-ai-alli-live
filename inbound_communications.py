@@ -43,7 +43,7 @@ def profile(context, sid, phone):
     return OutboundCall(request_id='inbound-'+sid,phone=phone,recipient_name='Unverified caller',
         mission='Take a message for John; no calendar or email actions are authorized.',capabilities=[])
 
-async def build_session(base, context, sid, phone, channel, repository=store, end=None, owner_text="",session_reader=None):
+async def build_session(base, context, sid, phone, channel, repository=store, end=None, owner_text="",session_reader=None,current_request=''):
     import owner_access
     group_state={'active':False}
     def source_reader():
@@ -122,7 +122,7 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
     if contact_assistance or owner:
         from work_agent import phone_tools,owner_call_tools
         registry.extend(phone_tools(store.normalize_phone(phone),recognized or ('John Rector' if owner else 'Saved contact'),sid,owner_scope=owner,source_request=owner_text,source_reader=source_reader,include_history=owner_verified or private_voice,origin=dict(channel=channel,number_verified=private_voice)))
-        if owner:registry.extend(owner_call_tools(store.normalize_phone(phone),sid))
+        if owner:registry.extend(owner_call_tools(store.normalize_phone(phone),sid,source_request=owner_text,source_reader=source_reader,latest_request=current_request))
     public_group_work=None
     if channel=='voice' and (contact_assistance or owner):
         import conference_notes
@@ -197,11 +197,15 @@ async def build_session(base, context, sid, phone, channel, repository=store, en
                 if await asyncio.to_thread(__import__('security_controls').blocked,phone):return dict(ok=False,error='This contact’s access has been suspended by John',performed=False)
                 if live and live.metadata.get('budget_blocked'):return dict(ok=False,error='This call has reached its application usage ceiling',performed=False)
                 if group_state['active']:
+                    if live and live.metadata.get('suppress_transcript_persistence') and original.name=='start_cloud_work':return dict(ok=False,error='Group capture is paused. Please text this assignment privately so it can be saved without retaining the paused discussion.')
                     if original.name=='start_cloud_work':return await public_group_work(**kwargs)
                     if original.name not in {'check_calendar','check_meeting_time','create_meeting','create_reminder_for_john','record_promise'}:
                         return dict(ok=False,error='Private history, account tools and account actions are unavailable on a shared audio line. John can delegate private work by text; continue helping with public group work.')
                 if owner and not await asyncio.to_thread(owner_access.authorized,phone,channel,sid):
                     return await asyncio.to_thread(owner_access.request,phone,channel,sid,owner_text[:180])
+                if owner and original.name in {'send_email','text_contact','save_friend_contact','set_appointment_reminders','cancel_scheduled_text'}:
+                    authority=await __import__('work_agent').native_authority(phone,sid,original,kwargs,source_reader(),current_request)
+                    if not authority['allowed']:return dict(ok=False,error=authority['reason'],performed=False)
                 if contact_assistance and not private_voice and original.name in {'find_meetings','update_meeting','cancel_meeting','get_my_work','get_my_promises','continue_cloud_work','cancel_cloud_work','remember_work_preference'}:
                     return dict(ok=False,error='This call’s number could not be authenticated by the carrier. For private existing meetings/work or changes, please text Alli from your saved number. No approval from John is needed.')
                 try:result=await original(**kwargs)
@@ -296,6 +300,7 @@ class InboundCommunications:
             await asyncio.to_thread(conference_notes.checkpoint,sid,session)
             with contextlib.suppress(ValueError):await asyncio.to_thread(conference_notes.finalize,sid)
         transcript=session.metadata.get('live_transcript_fragments') or [{'role':t.get('role'),'text':str(t.get('text',''))[:4000]} for t in session.metadata.get('transcript',[])[-100:] if t.get('role') in ('user','assistant')]
+        transcript=transcript[session.metadata.get('transcript_persist_start',0):]
         if session.metadata.get('suppress_transcript_persistence'):transcript=[dict(role='assistant',text='Group note-taking was paused; discussion content omitted.')]
         await asyncio.to_thread(self.store.finish,sid,'completed',transcript=transcript)
         if not session.metadata.get('suppress_transcript_persistence'):
@@ -327,7 +332,7 @@ class InboundCommunications:
         from contact_concierge import trusted_contact
         if not security.owner(row['phone']) and not trusted_contact(context,row['phone'],'sms'):
             return "Hi, I’m Alli, John’s AI assistant. Since you’re not on his approved list yet, I’ve saved your message for him. I’ll need his approval before committing to appointments or other work."
-        session,registry=await build_session(self.base,context,row['sid'],row['phone'],'sms',self.store,owner_text='\n'.join([str(h.get('body','')) for h in context.get('history',[]) if h.get('channel')=='sms']+[row['body']]))
+        session,registry=await build_session(self.base,context,row['sid'],row['phone'],'sms',self.store,owner_text='\n'.join([str(h.get('body','')) for h in context.get('history',[]) if h.get('channel')=='sms']+[row['body']]),current_request=row['body'])
         by_name={t.name:t for t in registry}
         messages=[{'role':'user','content':row['body']}]
         api=client or AsyncOpenAI(timeout=90,max_retries=0)
@@ -520,7 +525,7 @@ class InboundCommunications:
                     if remaining<=0 or await asyncio.to_thread(__import__('security_controls').blocked,entry.get('phone','')):
                         await adapter.close();break
                     if live and now-last_checkpoint>=15:
-                        fragments=[] if live.metadata.get('suppress_transcript_persistence') else live.metadata.get('live_transcript_fragments',[])
+                        fragments=[] if live.metadata.get('suppress_transcript_persistence') else live.metadata.get('live_transcript_fragments',[])[live.metadata.get('transcript_persist_start',0):]
                         await asyncio.to_thread(self.store.checkpoint_transcript,entry['sid'],fragments)
                         if live.metadata.get('group_notes_active'):await asyncio.to_thread(__import__('conference_notes').checkpoint,entry['sid'],live)
                         last_checkpoint=now

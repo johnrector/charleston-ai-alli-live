@@ -65,6 +65,13 @@ def recover():
 
 def normalized(text):return ' '.join(re.findall(r'\w+',str(text).casefold()))
 
+def reviewed(job,followups):
+    """Supersede the generic missing-report alert without erasing its audit."""
+    sid=job['context']['call_recovery_sid']
+    with store.connection() as db:
+        store.notify(db,'call-reviewed:'+job['id'],dict(source='call_followthrough',sid=sid,phone=job['phone'],work_id=job['id'],status='delegated' if followups else 'reviewed',follow_up_needed=False,
+          summary='Call assignment saved for independent follow-through' if followups else 'Call reviewed; no unfinished assignment requires John'))
+
 def refresh_review(job):
     """A late live-tool receipt must reach the reviewer before it creates work."""
     from psycopg.types.json import Jsonb
