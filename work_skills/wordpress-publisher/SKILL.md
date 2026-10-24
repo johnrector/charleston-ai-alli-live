@@ -21,7 +21,7 @@ illustration with wordpress_media when needed; retain its actual URL/dimensions.
 Run wordpress_prepare on the exact HTML. Then wordpress_snapshot(phase=preflight)
 uploads an exact source/assets bundle into this isolated hosted container. Use
 the provided render_article.py to render it with sandboxed Chromium, networking
-blocked and UID/GID normalized. Cite the three viewport PNGs, heading-sheet PNG
+blocked and UID/GID normalized. The renderer uses an offline preview origin for captured public bytes; it does not navigate the network-disabled browser to the public website. Public extraction is checked separately against the actual fetched URL. Cite the three viewport PNGs, complete 390-full.png, heading-sheet PNG
 and DOM audit JSON as actual file outputs; wordpress_artifacts imports the real /mnt/data files from this job’s isolated container and returns their IDs, even before file citations are emitted. Save preflight outputs in /mnt/data/wordpress-preflight and live outputs in /mnt/data/wordpress-live.
 wordpress_publish requires these actual proofs and an independent visual review.
 It stages and checks exact HTML, then publishes only on John's explicit request.

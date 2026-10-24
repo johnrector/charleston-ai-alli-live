@@ -5,7 +5,7 @@ import wordpress_publish as publisher
 NAMES={'article_artifacts','article_verify'}
 def schemas(schema):
     return [schema('article_artifacts','Import actual generated HTML, screenshots and DOM audit from this article’s isolated cloud container. Returns real file IDs. No account access.',{},()),
-      schema('article_verify','Verify the exact standalone HTML plus real desktop/320/390 and heading screenshots and DOM audit. Repair and rerun on failure. Required before saying the article is finished.',dict(source_id=dict(type='string'),screenshot_ids=dict(type='array',items=dict(type='string')),audit_id=dict(type='string')),('source_id','screenshot_ids','audit_id'))]
+      schema('article_verify','Verify the exact standalone HTML plus real desktop/320/390, complete 390-full.png and heading screenshots and DOM audit. Repair and rerun on failure. Required before saying the article is finished.',dict(source_id=dict(type='string'),screenshot_ids=dict(type='array',items=dict(type='string')),audit_id=dict(type='string')),('source_id','screenshot_ids','audit_id'))]
 
 async def import_files(job,client):
     from pathlib import Path
@@ -17,7 +17,6 @@ async def import_files(job,client):
     for f in listing.data[:100]:
         path=getattr(f,'path','') or ''
         if not path.startswith('/mnt/data/') or Path(path).suffix.lower() not in {'.html','.png','.json','.jpg','.jpeg','.webp'}:continue
-        if Path(path).name=='390-full.png':continue
         content=await client.containers.files.content.retrieve(f.id,container_id=cid)
         digest=hashlib.sha256(content.content).hexdigest();key=cid+':'+f.id+':'+digest
         await asyncio.to_thread(jobs.cache_file,job['id'],key,Path(path).name,content.content)

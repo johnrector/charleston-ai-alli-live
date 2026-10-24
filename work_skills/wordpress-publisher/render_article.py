@@ -2,7 +2,7 @@
 """Read-only renderer for a server-captured public article bundle; no egress."""
 import hashlib,io,json,os,re,sys,tempfile,zipfile
 from pathlib import Path,PurePosixPath
-from urllib.parse import urldefrag
+from urllib.parse import urldefrag,urlsplit,urlunsplit
 
 bundle=Path(sys.argv[1]);output=Path(sys.argv[2]);output.mkdir(parents=True,exist_ok=True)
 if zipfile.is_zipfile(bundle):
@@ -25,22 +25,27 @@ for b in re.findall(r'(?:max|min)-width\s*:\s*(\d+)px',source):
     n=int(b)
     if 320<n<1800:widths.update((n-1,n+1))
 if len(widths)>19:raise ValueError('Too many breakpoints; inspect the design before rendering')
-audit=dict(source_hash=manifest['source_hash'],phase=manifest['phase'],url=manifest['url'],viewports=[])
+original=urlsplit(manifest['url'])
+preview_url=urlunsplit(('https','article.alli.invalid',original.path or '/',original.query,''))
+audit=dict(source_hash=manifest['source_hash'],phase=manifest['phase'],url=manifest['url'],render_url=preview_url,
+           rendering='Offline captured HTML and asset bytes; no public-site browser navigation',viewports=[])
 assets=manifest.get('assets',{})
 with sync_playwright() as p:
     browser=p.chromium.launch(executable_path=str(wrapper),headless=True,chromium_sandbox=True)
     context=browser.new_context(java_script_enabled=False,device_scale_factor=1)
     def route_request(route):
         url=urldefrag(route.request.url)[0]
-        if url==manifest['url']:route.fulfill(status=200,content_type='text/html',body=source);return
-        item=assets.get(url)
+        if url==preview_url:route.fulfill(status=200,content_type='text/html',body=source);return
+        parts=urlsplit(url)
+        asset_url=urlunsplit((original.scheme,original.netloc,parts.path,parts.query,'')) if parts.netloc=='article.alli.invalid' else url
+        item=assets.get(asset_url)
         if item:route.fulfill(status=200,content_type=item['content_type'],headers={'Access-Control-Allow-Origin':'*'},body=raw.read(item['file']));return
         route.abort()
     context.route('**/*',route_request)
     page=context.new_page();panels=[]
     for width in sorted(widths):
         page.set_viewport_size(dict(width=width,height=900 if width>=1100 else 844))
-        page.goto(manifest['url'],wait_until='load');page.evaluate('document.fonts.ready')
+        page.goto(preview_url,wait_until='load');page.evaluate('document.fonts.ready')
         metrics=page.evaluate('''() => {
           const root=document.querySelector('.codex-html-experience')?.shadowRoot||document;
           const headings=[...root.querySelectorAll('h1,h2,h3,h4,h5,h6')].filter(e=>e.getBoundingClientRect().height>0);
