@@ -74,7 +74,7 @@ def create_application(settings,repository,carrier,google,api):
     async def lifespan(app):
         await asyncio.to_thread(repository.initialize)
         await asyncio.to_thread(repository.bootstrap_owner,settings.owner_phone)
-        if settings.background:
+        if settings.background and settings.native_probe:
             from tools.probe_native_openai import agent_probe,live_probe
             brain,voice=await asyncio.gather(agent_probe(),live_probe())
             verified=(brain.get('managed_agent')=='completed' and brain.get('survived_client_disconnect')
@@ -82,6 +82,7 @@ def create_application(settings,repository,carrier,google,api):
                 and voice.get('live_finalized') and not voice.get('error_codes'))
             log.warning('native_readiness=%s',json.dumps({'verified':verified,'brain':brain,'voice':voice}))
             if not verified:raise RuntimeError('Production native OpenAI readiness failed; do not cut over traffic')
+        if settings.background:
             if await carrier.active():raise RuntimeError('Cutover deferred: the assistant has an active phone call')
             from datetime import datetime,timedelta,timezone
             begin=datetime.now(timezone.utc)+timedelta(days=1)

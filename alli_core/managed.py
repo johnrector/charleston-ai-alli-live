@@ -157,9 +157,15 @@ class ManagedRuntime:
             and item.phase == 'final_answer' and item.status == 'completed']
         text = finals[0].output_text if finals else ''
         status = turn.status
-        if status in {'failed','cancelled'} and not text:
-            text = 'I could not complete this assignment. Its activity and any actual action receipts are saved for review.'
         remaining, notify = (), True
+        code=getattr(getattr(turn,'error',None),'code',None)
+        if status in {'failed','cancelled'} and not text:
+            problems={
+                'usage_limit_exceeded':'OpenAI has stopped further AI work because the API organization reached a usage or billing limit. John needs to check API credits and spending limits. This is separate from ChatGPT/Codex allowances.',
+                'insufficient_quota':'OpenAI API credits or spending limits currently block further AI work. John needs to check API billing.',
+                'rate_limit_exceeded':'OpenAI temporarily rate-limited this assignment. Completed actions are retained; no uncertain action was repeated.'}
+            text=problems.get(code,'I could not complete this assignment. Its activity and any actual action receipts are saved for review.')
+            if code in problems:remaining=(text,)
         if turn.status == 'completed':
             try:
                 report = Outcome.model_validate_json(text)
@@ -173,6 +179,7 @@ class ManagedRuntime:
         # The store reconciles actual action receipts before deciding that the
         # assignment succeeded or notifying its recipient.
         reconciled = await asyncio.to_thread(self.store.record_outcome, task_id, status,
-                                text, turn_id=turn.id, remaining=remaining, notify=notify)
+                                text, turn_id=turn.id, remaining=remaining, notify=notify,
+                                provider_error=code)
         return {'state': reconciled.state if reconciled else status,
                 'text': reconciled.summary if reconciled else text, 'turn_id': turn.id}

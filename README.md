@@ -18,9 +18,13 @@ ChatGPT. Friends cannot use John's computer or private account tools.
 ## Run and test
 
 Install `requirements.txt`, configure the service's existing private environment
-variables, and run `python app.py`. `/healthz` reports configuration; startup also
-checks the actual OpenAI Live/Agents connections and Google Calendar before the
-service accepts traffic. Deployment refuses cutover while a call is active.
+variables, and run `python app.py`. `/healthz` reports configuration. Startup
+checks Google Calendar and refuses cutover while a call is active. Native model
+configuration is verified on each dispatch. Run `python -m tools.probe_native_openai`
+for a paid diagnostic of the actual Live/Agents connections; setting
+`ALLI_RUN_STARTUP_PROBE=true` also requires that diagnostic before cutover.
+Normal restarts do not launch paid reasoning tests or stop scheduled delivery
+because an unrelated AI-provider spending limit was reached.
 
 Use `.venv/bin/python -m pytest -q` for the isolated test suite. Database tests
 create disposable Postgres clusters and never use production `DATABASE_URL`.

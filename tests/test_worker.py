@@ -77,3 +77,53 @@ def test_input_saved_before_first_dispatch_does_not_strand_the_task(worker_setup
     assert repo.task_result(task['id'])['state']=='queued'
     assert [item['id'] for item in repo.ready_tasks()]==[task['id']]
     assert repo.task_context(task['id'])['saved_updates'][0]['text']=='The completed caller request'
+
+
+@pytest.mark.asyncio
+async def test_after_hangup_work_result_returns_to_existing_call_mission_once(worker_setup):
+    from adapters.calls import CallRepository
+    repo,owner,task,_,_,_,make_worker=worker_setup
+    repo.claim_dispatch(task['id']);repo.bind_session(task['id'],'existing-calling-agent')
+    calls=CallRepository(repo,'+18435550999')
+    call=calls.queue(task['id'],owner.person_id,'Ask what needs doing','one-call')
+    calls.claim()
+    calls.bind(call['id'],'CA-test',to='+18435550100',from_='+18435550999',status='completed',duration=40)
+    repo.save_transcript(str(call['conversation_id']),[{'role':'user','text':'Do the work after I hang up.'}],finalized=True)
+    conversation=repo.submit(owner,source_id='conversation:'+str(call['conversation_id']),
+        title='Caller work',instruction='Do the requested work',conversation_id=call['conversation_id'])
+    repo.claim_action(conversation['id'],'actual-send','send_email',{},True)
+    repo.save_action(conversation['id'],'actual-send',{'ok':True,'message_id':'actual-provider-id'})
+    repo.record_outcome(task['id'],'waiting','Waiting for delegated work.',turn_id='call1')
+    repo.record_outcome(conversation['id'],'partial','Email sent; Shopify requires authentication.',turn_id='work1')
+    await make_worker().forward_conversation_work()
+    await make_worker().forward_conversation_work()
+    inputs=repo.pending_inputs(task['id'])
+    assert len(inputs)==1 and 'Email sent' in inputs[0]['body']
+    assert 'not a new authorization' in inputs[0]['body']
+    assert repo.task_result(task['id'])['state']=='working'
+    assert repo.task_context(task['id'])['action_receipts'][0]['receipt']['message_id']=='actual-provider-id'
+    assert calls.claim() is None
+
+
+@pytest.mark.asyncio
+async def test_scheduled_delivery_continues_while_native_observation_is_blocked(worker_setup):
+    import asyncio
+    repo,owner,task,outbox,carrier,runtime,make_worker=worker_setup
+    repo.claim_dispatch(task['id']);repo.bind_session(task['id'],'native-session')
+    outbox.queue_text(task['id'],owner.person_id,'Already authorized delivery','delivery')
+    observing,release,sent=asyncio.Event(),asyncio.Event(),asyncio.Event()
+    async def observe(*args):
+        observing.set()
+        await release.wait()
+    async def send(*args,**kwargs):
+        await observing.wait()
+        sent.set()
+        return {'ok':True,'message_sid':'SM-test','status':'queued'}
+    runtime.inspect.side_effect=observe;carrier.send.side_effect=send
+    worker=make_worker();running=asyncio.create_task(worker.run())
+    try:
+        await asyncio.wait_for(sent.wait(),3)
+        assert not release.is_set() and carrier.send.await_count==1
+    finally:
+        worker.stopping.set();release.set()
+        await asyncio.wait_for(running,3)

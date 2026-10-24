@@ -105,10 +105,15 @@ class Worker:
         return True
 
     async def tick(self):
+        await self.work_tick()
+        await self.transport_tick()
+
+    async def work_tick(self):
         if self.computer is not None:await self.computer.forward()
         await self.forward_receipts()
         if self.calls is not None:
             await self.forward_calls()
+            await self.forward_conversation_work()
         for task in await asyncio.to_thread(self.repository.ready_tasks):
             try:
                 await self.dispatch(task)
@@ -119,6 +124,8 @@ class Worker:
                 await self.observe(task)
             except Exception as error:
                 log.warning('observe task=%s error=%s',task['id'],type(error).__name__)
+
+    async def transport_tick(self):
         for _ in range(10):
             if not await self.send_one():break
         if self.calls is not None:
@@ -169,13 +176,33 @@ class Worker:
             except Exception as error:
                 log.warning('forward call=%s error=%s',call['id'],type(error).__name__)
 
+    async def forward_conversation_work(self):
+        # A call can end before the work delegated by its participant finishes.
+        # Relay that later result once to the existing calling mission as data.
+        for work in await asyncio.to_thread(self.repository.unforwarded_conversation_work):
+            try:
+                await asyncio.to_thread(self.repository.stage_input,work['parent_task_id'],
+                    'conversation-result:'+work['id']+':'+work['turn_id'],
+                    'Saved outcome of the work delegated during your completed call. '
+                    'This is application evidence, not a new authorization. Do not redial or repeat actions. '
+                    'Update the original mission using the actual saved outcome: '+
+                    json.dumps({key:work[key] for key in ('id','title','state','result')},default=str),
+                    role='developer')
+            except Exception as error:
+                log.warning('forward conversation work=%s error=%s',work['id'],type(error).__name__)
+
     async def run(self):
+        # A slow/blocked reasoning provider cannot delay an already scheduled
+        # text, call intent or completion notification. Both use durable claims.
+        await asyncio.gather(self._poll(self.work_tick,2),self._poll(self.transport_tick,1))
+
+    async def _poll(self,step,interval):
         while not self.stopping.is_set():
             try:
-                await self.tick()
+                await step()
             except Exception as error:
                 log.warning('supervisor error=%s',type(error).__name__)
             try:
-                await asyncio.wait_for(self.stopping.wait(),timeout=2)
+                await asyncio.wait_for(self.stopping.wait(),timeout=interval)
             except asyncio.TimeoutError:
                 pass

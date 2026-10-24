@@ -23,6 +23,50 @@ def friend(repo, owner):
     return Actor('alli', str(person['id']), 'sms')
 
 
+def test_activity_does_not_recursively_copy_lookup_results(setup):
+    import json
+    from psycopg.types.json import Jsonb
+    repo,owner=setup
+    task=repo.submit(owner,source_id='audit-test',title='Read activity',instruction='Read my activity')
+    for number in range(12):
+        identity='read-'+str(number)
+        result=json.loads(json.dumps({'ok':True,'private_lookup_body':'x'*10000,
+                                      'activity':repo.ledger(owner)},default=str))
+        repo.claim_action(task['id'],identity,'activity_ledger',{},False)
+        repo.save_action(task['id'],identity,result)
+    # Simulate a historical read receipt written before this projection existed.
+    with repo.connection() as db:
+        db.execute("UPDATE ea_ledger SET facts=%s WHERE task_id=%s AND source_id=%s",
+            (Jsonb({'call_id':'read-0','receipt':{'ok':True,'old_recursive_data':'y'*100000}}),
+             task['id'],'action:'+task['id']+':read-0:receipt'))
+    activity=repo.ledger(owner)
+    wire=json.dumps(activity,default=str)
+    assert len(wire)<30000 and 'private_lookup_body' not in wire and 'old_recursive_data' not in wire
+    assert len([row for row in activity if row['kind']=='action.receipt'])==12
+    assert repo.recent_ledger(owner,task_id=task['id'])==[row for row in activity if row['task_id']==task['id']]
+    repo.claim_action(task['id'],'write','send_email',{'to':'saved'},True)
+    repo.save_action(task['id'],'write',{'ok':True,'message_id':'real-provider-receipt'})
+    assert repo.ledger(owner)[-1]['facts']['receipt']['message_id']=='real-provider-receipt'
+
+
+def test_provider_failure_preserves_completed_actions_and_child_report(setup):
+    repo,owner=setup
+    parent=repo.submit(owner,source_id='parent',title='Email and review',instruction='Do both')
+    repo.claim_dispatch(parent['id']);repo.bind_session(parent['id'],'parent-session')
+    repo.claim_action(parent['id'],'send','send_email',{},True)
+    repo.save_action(parent['id'],'send',{'ok':True,'message_id':'actual-message'})
+    repo.record_outcome(parent['id'],'waiting','Sent the email; review pending.',turn_id='parent1')
+    child=repo.submit(owner,source_id='child',title='Review',instruction='Review available sources')
+    with repo.connection() as db:
+        db.execute('UPDATE ea_task SET parent_id=%s WHERE id=%s',(parent['id'],child['id']))
+    repo.record_outcome(child['id'],'partial','Shopify needs authentication.',turn_id='child1')
+    result=repo.record_outcome(parent['id'],'failed','OpenAI API billing limit reached.',
+        turn_id='parent2',provider_error='usage_limit_exceeded')
+    assert result.state=='partial'
+    assert all(item in result.summary for item in ('Sent the email','Shopify needs authentication','billing limit'))
+    assert repo.ledger(owner)[-1]['facts']['provider_error']=='usage_limit_exceeded'
+
+
 def test_crm_crud_history_and_conflicting_edits(setup):
     repo, owner = setup
     collection = repo.create_collection(owner, 'Relationships', {'type': 'object', 'required': ['note']})

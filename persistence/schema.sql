@@ -220,6 +220,17 @@ CREATE TABLE IF NOT EXISTS ea_ledger (
     FOREIGN KEY(assistant_id,task_id) REFERENCES ea_task(assistant_id,id)
 );
 CREATE INDEX IF NOT EXISTS ea_ledger_person ON ea_ledger(assistant_id,person_id,id DESC);
+-- Activity is an audit of operations, not a recursive copy of every lookup.
+-- Project old and new read receipts alike; immutable raw evidence stays saved.
+CREATE OR REPLACE VIEW ea_activity AS
+SELECT l.id,l.assistant_id,l.person_id,l.task_id,l.source_id,l.kind,
+    CASE WHEN l.kind='action.receipt' AND a.writes=false THEN
+        jsonb_build_object('call_id',a.call_id,'tool',a.tool,'read',true,
+            'receipt',jsonb_build_object('ok',a.receipt->'ok',
+                'error',a.receipt->'error','lookup_data_omitted',true))
+    ELSE l.facts END AS facts,l.created_at
+FROM ea_ledger l LEFT JOIN ea_action a ON l.kind='action.receipt'
+    AND a.task_id=l.task_id AND a.call_id=l.facts->>'call_id';
 CREATE TABLE IF NOT EXISTS ea_tool_grant (
     digest text PRIMARY KEY,
     assistant_id text NOT NULL,

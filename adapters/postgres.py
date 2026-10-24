@@ -216,7 +216,7 @@ class PostgresRepository:
     def recent_ledger(self,actor,*,person_id=None,task_id=None,limit=100):
         with self.connection() as db:
             self._person(db,actor,owner=True)
-            rows=db.execute('''SELECT * FROM ea_ledger WHERE assistant_id=%s
+            rows=db.execute('''SELECT * FROM ea_activity WHERE assistant_id=%s
                 AND (%s::uuid IS NULL OR person_id=%s::uuid) AND (%s::text IS NULL OR task_id=%s)
                 ORDER BY id DESC LIMIT %s''',(self.profile.id,person_id,person_id,task_id,task_id,
                                              min(max(limit,1),500))).fetchall()
@@ -311,7 +311,7 @@ class PostgresRepository:
     def ledger(self, actor, *, after=0, person_id=None, limit=100):
         with self.connection() as db:
             self._person(db, actor, owner=True)
-            return db.execute('''SELECT * FROM ea_ledger WHERE assistant_id=%s AND id>%s
+            return db.execute('''SELECT * FROM ea_activity WHERE assistant_id=%s AND id>%s
                 AND (%s::uuid IS NULL OR person_id=%s::uuid) ORDER BY id LIMIT %s''',
                 (self.profile.id, after, person_id, person_id, min(max(limit, 1), 500))).fetchall()
 
@@ -500,10 +500,15 @@ class PostgresRepository:
                                    (task_id, call_id)).fetchone()
                 if not prior or prior['receipt'] != result:
                     raise Conflict('Action already has a different receipt')
+            operation=db.execute('SELECT tool,writes FROM ea_action WHERE task_id=%s AND call_id=%s',
+                                 (task_id,call_id)).fetchone()
+            audit=result if operation['writes'] else {
+                'ok':result.get('ok'),'error':result.get('error'),'lookup_data_omitted':True}
             self._event(db, 'action:'+task_id+':'+call_id+':receipt', 'action.receipt',
-                        {'call_id': call_id, 'receipt': result}, person_id=task['person_id'], task_id=task_id)
+                        {'call_id':call_id,'tool':operation['tool'],'read':not operation['writes'],
+                         'receipt':audit},person_id=task['person_id'],task_id=task_id)
 
-    def record_outcome(self, task_id, status, text, *, turn_id, remaining=(), notify=True):
+    def record_outcome(self, task_id, status, text, *, turn_id, remaining=(), notify=True,provider_error=None):
         if status not in {'completed','partial','waiting','failed','cancelled'}:
             raise ValueError('Only a terminal turn can have an outcome')
         with self.connection() as db:
@@ -532,6 +537,25 @@ class PostgresRepository:
             if db.execute("SELECT 1 FROM ea_delivery WHERE task_id=%s AND source_id NOT LIKE 'result:%%' AND state='failed' LIMIT 1",(task_id,)).fetchone():
                 unresolved=True
             state = 'partial' if unresolved else status
+            if status=='failed':
+                # An unavailable model must not erase work already completed or
+                # the verified result returned by its computer assignment.
+                evidence=[]
+                if task['result'] and task['result']!=text:
+                    evidence.append('Earlier saved status: '+task['result'][:6000])
+                children=db.execute('''SELECT t.title,t.state,left(t.result,6000) AS result FROM ea_task t
+                    WHERE t.assistant_id=%s AND t.id<>%s AND (t.parent_id=%s OR EXISTS
+                        (SELECT 1 FROM ea_phone_call c WHERE c.parent_task_id=%s
+                            AND c.conversation_id=t.conversation_id))
+                    AND t.state IN ('completed','partial') AND t.result<>''
+                    ORDER BY t.created_at LIMIT 5''',(self.profile.id,task_id,task_id,task_id)).fetchall()
+                evidence.extend(child['title']+': '+child['result'] for child in children)
+                if evidence:
+                    state='partial'
+                    text='\n\n'.join([text,*evidence])
+                if provider_error and task['scope']!='owner':
+                    text='The AI service could not finish the remaining work. John needs to resolve its connection. Completed work and receipts are retained.'
+                    remaining=('Service connection needs John’s attention.',)
             if unresolved and status == 'completed':
                 text = 'Some requested actions have no verified success receipt. The work and actual receipts are saved for review.'
             if status == 'completed' and pending:
@@ -546,7 +570,8 @@ class PostgresRepository:
             db.execute('UPDATE ea_agent_run SET turn_id=%s,updated_at=now() WHERE task_id=%s', (turn_id, task_id))
             self._event(db, 'task:'+task_id+':turn:'+turn_id, 'task.'+state,
                         {'summary': text, 'remaining':list(remaining), 'notify_requested':notify,
-                         'turn_id': turn_id, 'unresolved_actions': unresolved},
+                         'turn_id': turn_id, 'unresolved_actions': unresolved,
+                         'provider_error':provider_error},
                         person_id=task['person_id'], task_id=task_id)
             return FinalizedOutcome(state,text)
 
@@ -668,6 +693,11 @@ class PostgresRepository:
                 'instruction':task['instruction'],'remaining':task['context'].get('remaining',[]),
                 'current_conversation':conversation,
                 'recent_conversations':excerpts,
+                'action_receipts':db.execute('''SELECT task_id,tool,state,arguments,receipt FROM ea_action a
+                    WHERE a.writes AND (a.task_id=%s OR EXISTS
+                        (SELECT 1 FROM ea_task t JOIN ea_phone_call c ON c.conversation_id=t.conversation_id
+                         WHERE t.id=a.task_id AND c.parent_task_id=%s))
+                    ORDER BY a.updated_at DESC LIMIT 50''',(task_id,task_id)).fetchall(),
                 'delivery_receipts':db.execute('''SELECT id,channel,destination,state,provider_id,receipt,due_at
                     FROM ea_delivery WHERE assistant_id=%s AND task_id=%s ORDER BY created_at DESC LIMIT 30''',
                     (self.profile.id,task_id)).fetchall(),
@@ -695,6 +725,22 @@ class PostgresRepository:
                 JOIN ea_agent_run r ON r.task_id=t.id WHERE t.assistant_id=%s
                 AND t.state IN ('working','waiting') ORDER BY r.updated_at LIMIT %s''',
                 (self.profile.id,min(max(limit,1),100))).fetchall()
+
+    def unforwarded_conversation_work(self):
+        with self.connection() as db:
+            return db.execute('''SELECT t.id,t.title,t.state,left(t.result,10000) AS result,
+                r.turn_id,c.parent_task_id FROM ea_task t
+                JOIN ea_agent_run r ON r.task_id=t.id
+                JOIN ea_phone_call c ON c.conversation_id=t.conversation_id
+                JOIN ea_conversation v ON v.id=c.conversation_id
+                JOIN ea_task p ON p.id=c.parent_task_id
+                WHERE t.assistant_id=%s AND t.source_id='conversation:'||c.conversation_id::text
+                    AND t.id<>p.id AND c.state='finished' AND v.finalized
+                    AND t.state IN ('completed','partial','failed') AND r.turn_id IS NOT NULL
+                    AND p.state IN ('working','waiting') AND NOT EXISTS
+                    (SELECT 1 FROM ea_agent_input i WHERE i.id=
+                        'conversation-result:'||t.id||':'||r.turn_id)
+                ORDER BY t.updated_at LIMIT 20''',(self.profile.id,)).fetchall()
 
     def stage_input(self,task_id,submission_id,text,*,role='user'):
         if role not in {'user','developer'} or not 1<=len(text)<=200000:

@@ -120,6 +120,20 @@ def test_another_assignments_session_is_rejected(setup):
     assert not store.outcomes
 
 
+def test_api_billing_failure_is_specific_and_keeps_the_native_session(setup):
+    runtime,store,sessions=setup
+    store.sid='native1'
+    sessions.retrieve.return_value.status='idle'
+    sessions.turns.list.return_value=NS(data=[NS(id='turn1',status='failed',
+        error=NS(code='usage_limit_exceeded'))])
+    sessions.items.list.return_value=NS(data=[])
+    result=asyncio.run(runtime.inspect('task1'))
+    assert 'billing limit' in result['text'] and 'ChatGPT' in result['text']
+    assert store.outcomes[0][1]['provider_error']=='usage_limit_exceeded'
+    assert store.outcomes[0][1]['remaining']
+    assert store.sid=='native1' and sessions.create.await_count==0
+
+
 def test_mac_access_is_checked_before_creating_an_agent(setup):
     from alli_core.execution import Execution
     runtime, store, sessions = setup

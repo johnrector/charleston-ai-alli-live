@@ -1,109 +1,93 @@
-# Rebuild checkpoint — October 24, 2026
+# Live validation checkpoint — October 24, 2026
 
-The clean-runtime branch replaces the old reasoning/article runtime. At this
-checkpoint it has not yet been committed, pushed or deployed. Production main
-is b4e05067ff8090cdadfc24dd17b408a2651d4c17. Do not confuse local tests with a
-verified release. The user has authorized finishing and deployment, without
-optional menus, new recurring charges or Mac-plugin migration.
+Native GPT-Live (gpt-live-1) owns phone conversation; native managed Agents
+(gpt-6.1-sol, high) own work. Twilio transports calls/audio/SMS. The old article
+studio, TAC and application reasoning loop were removed. Do not migrate the
+Mac plugin collection. Ordinary cloud work needs no Mac.
 
-## Verified
+## Actual deployed evidence
 
-- Native API tests: GPT-Live started/finalized with PCMU 8 kHz; GPT-6.1 Sol/high
-  used real public-documentation MCP tools and finished after the submitting
-  client disconnected. The full configured work schema, including structured
-  outcomes, web search and MCP, was accepted. Test sessions were removed.
-- Actual native Mac execution wrote/read a disposable file via official
-  exec-server. The separate environment-only key was denied agent session reads
-  with HTTP 403. The application key was withheld. No plugin task was tested.
-- Latest full local suite: 76 passed, with disposable real Postgres, authenticated
-  MCP HTTP, signed transport boundaries, persistence across simulated restarts,
-  receipt deduplication, caller/principal separation, contact suspension, booking
-  limits, OAuth refresh continuity and callback signatures/private-address blocks.
-- Native MCP Events subscription/filter/delivery/unsubscribe lifecycle passed
-  against a test callback. This is not a native Dot delivery test.
-- Existing Google storage was inspected: it contains an encrypted raw refresh
-  token, not a Credentials JSON object. The new adapter preserves that format,
-  uses existing private client registration variables and tests its compatibility.
-  Current grant supports Calendar/free-busy and Gmail send, not Gmail inbox read.
+e12f3ec212fac80627cf744090bc1664a7cd5012 went live at 21:56 UTC, following
+0a008bd54529d8c6468ff6875a0214c8a85297cf at 21:42. Native Live/Agents/MCP and
+Google Calendar startup probes passed. Git preserves the old production commit
+as an ancestor; no force push, new service or additional compute upgrade.
 
-## Integrated implementation
+- Real incoming ALLI-CLEAN-1024 owner SMS created the correct private calendar
+  reminder, sent the confirmation email, and delivered the five-minute text
+  about two seconds after due time. Independent Calendar/Gmail reads verified
+  results. The disposable event was deleted and its absence verified.
+- The first outgoing call reached the owner but exposed incorrect Live event
+  handling: offset_ms belongs to DelegationCreatedEvent, not its nested object.
+  Tests now use the actual SDK model. Native follow-up inputs accept only user;
+  application evidence now uses that wire role in a data envelope explicitly
+  marked new_authorization=false. Server-side authority remains unchanged.
+  A real corrected follow-up passed. A transient initial-input 409 retains the
+  same saved key; never recreate the session as a retry.
+- The second outgoing call captured a natural 55-second two-way conversation,
+  finalized without a Live error and saved delegation before hangup. Alli sent
+  the requested saved-contact test email after hangup; an independent Gmail
+  Sent read verified its provider message ID. Other work reached the official
+  Mac executor; the environment API independently confirmed connected.
+- The Mac run returned verified partial results. Shopify required authentication.
+  Its Gmail plugin exposed no mailbox-reading tools in this API runtime.
+  Existing Calendar access worked. Do not claim all plugins/inbox reading are
+  connected, or replace missing order/mailbox evidence with guesses.
+- The owner confirmed an actual native Dot notification accurately reporting
+  calendar/email/SMS completion and later call progress. This is real Dot
+  delivery evidence, beyond local signed-callback tests.
+- One previously authorized birthday SMS remains queued once for November 1,
+  9 AM Eastern. Its old delivery was canceled during handover. Old article,
+  failed-call and other work queues were not replayed.
 
-- app.py/FastAPI entrypoint; persistent shared call binding, native GPT-Live,
-  durable delegation/hangup review, managed-session supervision and SMS/call
-  outboxes. No TAC, application reasoning loop, step-count cutoff or article
-  studio. OpenAI decides speech/tool use; Twilio only executes transport.
-- Owner dashboard with persistent 12-hour sessions, CSRF, People CRUD/status,
-  latest activity, work and promises. Human result links redirect to sign-in
-  with a return path. Existing-code input stays visible during resend cooldown.
-- Owner OAuth/MCP bridge, legacy connector refresh read compatibility, shared
-  activity feed and signed MCP Events with stored subscriptions/outbound retries.
-- Owner-only Mac computer assignments; signed outbound device leases with replay
-  protection; official executor supervisor. Mac jobs wait offline. Plugin
-  inventory is private and selectable per assignment; credentials are not copied
-  into Render or model instructions. Real broker/plugin integration is untested.
-- One-time useful-contact seed respects deleted/suspended/unapproved records.
-  The one explicitly authorized future birthday commitment is retained once;
-  old article, failed-call and other work queues are not replayed.
+## Latest reliability changes
 
-## Private configuration / service
+OpenAI returned usage_limit_exceeded when the Mac result reached its parent.
+The owner confirmed depleted API credits and replenished them. API credits are
+separate from ChatGPT/Codex allowances. This task made no purchase or limit change.
+
+Activity reads had copied earlier lookup results into audit events. The activity
+projection now provides compact read receipts for old/new rows while retaining
+raw evidence and complete write/provider receipts. Failure reporting preserves
+prior progress and child results, identifies known service errors and supplies
+actual write receipts to continued work. Later conversation-work results return
+once to the original calling mission. Transport and completion reporting poll
+independently of native session observation; a blocked AI request cannot delay
+an already authorized text. Paid readiness probes are explicit diagnostics;
+normal restarts do not require them. Active-call cutover protection remains.
+
+Latest local suite: **82 passed**, with isolated real Postgres, authenticated
+MCP HTTP, actual SDK schema/event validation, durable state, cryptography and
+blocked-reasoner/scheduled-delivery concurrency. Check Render's commit against
+Git before claiming these latest changes live.
+
+## Remaining live gates
+
+1. Verify the latest reliability commit through Render MCP and public health.
+2. Verify the pending call mission reports actual partial results after the
+   credit refill, without redialing or repeating its completed email.
+3. Test a real incoming call on the clean deployment and final text after
+   hangup. Earlier incoming calls were against the old runtime.
+4. Confirm actual iPhone dashboard session persistence across result links.
+   Twelve-hour server persistence, redirects and cooldown/code-entry behavior
+   passed automated tests; that is not an actual Safari persistence test.
+
+## Operations
 
 Render service srv-dasnm0vpn0mc7397ejg0, confirmed workspace
-tea-d9tvnp2d0e5s73a57560, existing approved 1c-2g plan. Native Python build:
-`pip install -r requirements.txt`; start `python app.py`. No new service or plan.
-Use MCP/API/CLI only. Database network access stays closed to external clients.
+tea-d9tvnp2d0e5s73a57560, existing approved 1c-2g plan. Build pip requirements;
+start python app.py. Use MCP/API/CLI only. Keep the database external network
+allowlist closed. Never print environment values or commit personal contact
+seeds, credentials or plugin inventories.
 
-Mac files: ~/.config/alli/executor.key (restricted), device.key (Ed25519 private)
-and mac.json (device/plugin inventory), all private and outside Git. The outbound supervisor is installed as the user
-LaunchAgent me.johnrector.alli.executor; its real cloud handoff is untested. Public verifier and inventory were saved to the existing
-Render service as ALLI_MAC_CONFIG_JSON; owner-supplied seed data is private
-ALLI_SEED_CONTACTS_JSON. Environment updates used merge, preserving other values.
-Do not commit private contact numbers, inventory or credentials to the public repo.
+The Mac LaunchAgent me.johnrector.alli.executor runs tools.mac_executor from
+this checkout. Private credentials/configuration live in ~/.config/alli.
+Its environment-only key is distinct from the application key; an actual
+session-read request returned 403. Device leases use Ed25519 signatures,
+timestamps and replay-resistant nonces. Pass OpenAI's returned HTTPS remote_url
+unchanged to its executor, which establishes outbound WebSocket connectivity.
+No inbound desktop-control port is exposed. Desktop/Alli points to this checkout.
 
-## Required next
-
-1. Finish focused checks of the latest changes; update this checkpoint from
-   actual results. Inspect git diff and commit a clean tree with rollback history.
-2. Deploy through Git/MCP. Startup probes the production OpenAI key and Google
-   connection, and checks for active calls before cutover. Inspect actual logs.
-3. Install the outbound Mac supervisor and test the real broker, then one read-only
-   compatible plugin task. API remote_url is actually https://api.openai.com;
-   pass it unchanged to exec-server, which establishes its own outbound WebSocket.
-4. Test real owner incoming SMS through calendar/email/delayed text, real outgoing
-   human call, incoming full-duplex/hangup work and persistent phone browser login.
-   Prior old-runtime outbound calls never rang John; removing AMD is not proof
-   that this is fixed. Diagnose real carrier/session evidence.
-5. Rescan the plugin's tools/events and verify native Dot subscription/delivery
-   and the matching portal record. Do not fabricate a Dot callback or assume
-   ChatGPT account credentials automatically belong to a managed API session.
-
-Current limits: inbox reading is not authorized by the existing Google grant;
-local plugins need individual connection validation. No rebuilt real human phone,
-email, calendar write, delayed SMS, native Dot or iPhone login test has passed yet.
-No claim of perfection or complete stability is warranted before those tests.
-
-## First live release and real tests
-
-0a008bd54529d8c6468ff6875a0214c8a85297cf deployed successfully at 21:42 UTC.
-Production native OpenAI Live/managed-MCP and Google Calendar startup probes
-passed. The existing authenticated connector read the new ledger without
-reauthorization. It confirms 57 seeded contacts and the one preserved birthday.
-
-The real incoming ALLI-CLEAN-1024 SMS created the correct private calendar event,
-sent mail as John Rector <john@ai-chs.com> to the configured owner, and scheduled
-and delivered its five-minute text within about two seconds of due time. Calendar
-and received email were independently verified with their connected services.
-Test calendar event ea7460804d9e11cf83f21252e8022d51dfeb9076de still needs cleanup.
-
-The real outgoing owner test reached a human and captured two-way speech, then
-exposed a bridge defect: Live's delegation offset_ms is on the event, not the
-nested delegation. Saved managed-session follow-ups also incorrectly used a
-developer role; the native API accepts only user messages. Both are corrected
-against SDK schemas; delegation tests now use the actual SDK model, and a real
-managed-API evidence follow-up completed successfully. Application evidence
-remains labeled as data, never fresh authorization. The API may return a
-transient 409 while its initial input is pending; retain and retry the same
-saved input key, never recreate the agent. Latest full suite: 77 passed.
-
-Do not claim voice delegation or after-hangup success until retested after the
-correction deploy. The first call's completed carrier status is not a successful
-work test. Existing pending follow-up records must resume, not be discarded.
+Existing Google connector storage and owner OAuth refresh compatibility are
+preserved. The Google grant supports Calendar and Gmail send, not inbox read.
+Local plugin files do not automatically transfer ChatGPT account authorization.
+Saved-contact recognition never grants owner-private permissions.
