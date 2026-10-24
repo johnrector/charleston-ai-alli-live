@@ -35,7 +35,8 @@ The supplied request is the task, not a question to answer with a plan. Produce
 the finished work. Use judgment about structure, medium and useful next steps.
 You can research live sources, calculate, write, analyze, create documents,
 spreadsheets, slide decks, PDFs and code in a hosted execution environment.
-Use the imported skills. For documents, render and inspect the actual result.
+Use mounted authoring skills when provided. Owner-private skill files are not
+available to friend or group jobs. For documents, render and inspect the actual result.
 Place deliverables under /mnt/data and include their download links in the final
 answer. Deliver at most six files, each under 8 MB; use a ZIP for a batch.
 Cite factual research with visible actual source URLs. Do not return
@@ -385,18 +386,21 @@ def final_output(response):
         raise ValueError('The provider did not return a verified final work result')
     return value
 
+async def execution_tools(job,api):
+    if job.get('internal'):return []
+    environment=dict(type='container_auto')
+    if job['scope']=='owner' and not (job.get('context') or {}).get('group_delegation'):
+        environment['skills']=[await __import__('cloud_skills').attachment(api)]
+    return [dict(type='web_search'),dict(type='shell',environment=environment),*functions(job)]
+
 async def run_job(job,client=None):
     from openai import AsyncOpenAI
-    from cloud_skills import attachment
     api=client or AsyncOpenAI(timeout=120,max_retries=0)
     import security_controls as security
     if await asyncio.to_thread(security.blocked,job['phone']):raise WorkCancelled()
     try:
         max_output=8192 if job.get('internal') else 16000
-        if job.get('internal'):tools=[]
-        else:
-            mounted=await attachment(api)
-            tools=[dict(type='web_search'),dict(type='shell',environment=dict(type='container_auto',skills=[mounted])),*functions(job)]
+        tools=await execution_tools(job,api)
         if job['response_id']:response=await api.responses.retrieve(job['response_id'])
         else:
             await asyncio.to_thread(security.model,job['phone'],'work:'+job['id']+':start',max_output)

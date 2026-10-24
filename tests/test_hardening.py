@@ -274,3 +274,14 @@ def test_late_native_job_refreshes_call_review_before_recovery(monkeypatch):
     assert params[0].obj['existing_jobs'][0]['id']=='LATE-JOB'
     assert params[0].obj['review_revision']==1
     assert "state='queued'" in sql and 'response_id=NULL' in sql
+
+
+@pytest.mark.parametrize('scope,group,should_mount',[('owner',False,True),('friend',False,False),('owner',True,False)])
+def test_private_skill_snapshot_is_not_mounted_for_friends_or_groups(monkeypatch,scope,group,should_mount):
+    import cloud_skills
+    mount=AsyncMock(return_value={'type':'skill_reference','skill_id':'owner-private','version':'1'})
+    monkeypatch.setattr(cloud_skills,'attachment',mount)
+    tools=asyncio.run(work_agent.execution_tools(dict(scope=scope,phone=OWNER,context=dict(group_delegation=group)),object()))
+    environment=next(t['environment'] for t in tools if t['type']=='shell')
+    assert bool(environment.get('skills')) is should_mount
+    assert bool(mount.await_count) is should_mount
