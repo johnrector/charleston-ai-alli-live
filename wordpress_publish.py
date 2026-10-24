@@ -14,6 +14,7 @@ import wordpress_html as engine
 
 SITE='johnrector.me'
 NAMES={'wordpress_context','wordpress_media','wordpress_artifacts','wordpress_prepare','wordpress_publish','wordpress_verify','wordpress_snapshot'}
+class VisualValidationError(ValueError):pass
 
 
 def owner_only(job):
@@ -107,9 +108,11 @@ def safe_source(source):
     if len(source.encode())>300000:raise ValueError('Keep the article source below 300 KB')
     class Check(engine.HTMLParser):
         def handle_starttag(self,tag,attrs):
-            if tag in {'iframe','object','embed','base','form'}:raise ValueError('Executable/embedded content is not an article capability')
+            if tag in {'iframe','object','embed','base','form','animate','set','animatemotion','animatetransform'}:raise ValueError('Executable/embedded content is not an article capability')
             for name,value in attrs:
-                if name.lower().startswith('on') or (name in {'src','href','action'} and (value or '').lstrip().lower().startswith(('javascript:','vbscript:'))):raise ValueError('Executable HTML is forbidden')
+                uri=re.sub(r'[\x00-\x20\x7f]+','',value or '').lower()
+                if name.lower().startswith('on') or (name.lower().split(':')[-1] in {'src','href','action','formaction'} and uri.startswith(('javascript:','vbscript:','data:text/html'))):raise ValueError('Executable HTML is forbidden')
+            if tag=='meta' and dict(attrs).get('http-equiv','').lower()=='refresh':raise ValueError('Article redirects are forbidden')
     Check().feed(source)
 
 
@@ -136,6 +139,11 @@ def artifact(job,fid):
 
 
 async def visual(job,prepared,ids,audit_id,client,*,phase):
+    try:return await _visual(job,prepared,ids,audit_id,client,phase=phase)
+    except ValueError as exc:raise VisualValidationError(str(exc)) from exc
+
+
+async def _visual(job,prepared,ids,audit_id,client,*,phase):
     if not 4<=len(ids)<=5 or len(set(ids))!=len(ids):raise ValueError('Provide real desktop, 320, 390 screenshots and readable heading-sheet proof')
     audit=json.loads(artifact(job,audit_id)['content'])
     if audit.get('source_hash')!=prepared['source_hash'] or audit.get('phase')!=phase:raise ValueError('DOM audit must match this exact source and publication phase')

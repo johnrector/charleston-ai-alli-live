@@ -314,8 +314,16 @@ async def execute(job,call,client=None):
         raise Waiting(dict(kind='clarification',call_id=call.call_id,question=jobs.clean(args['question'],1500),ask_john=bool(args.get('ask_john')),arguments=args))
     if (job.get('context') or {}).get('public_article') and call.name not in (__import__('wordpress_publish').NAMES|__import__('article_studio').NAMES):raise ValueError('Article jobs use public research and their bound publishing/artifact tools only')
     if call.name=='find_connected_tools':return find_tools(args.get('query',''),job['scope'])
-    if call.name in __import__('article_studio').NAMES:return await __import__('article_studio').execute(job,call,args,client)
-    if call.name in __import__('wordpress_publish').NAMES:return await __import__('wordpress_publish').execute(job,call,args,client)
+    if call.name in __import__('article_studio').NAMES:
+        try:return await __import__('article_studio').execute(job,call,args,client)
+        except (ValueError,RuntimeError) as exc:return dict(ok=False,validation_error=str(exc),next='Repair the exact article, rerender and verify. Do not claim completion or ask for routine confirmation.')
+    if call.name in __import__('wordpress_publish').NAMES:
+        publisher=__import__('wordpress_publish');publisher.owner_only(job)
+        try:return await publisher.execute(job,call,args,client)
+        except publisher.VisualValidationError as exc:return dict(ok=False,validation_error=str(exc),next='Repair this same article and rerun exact-source dry-run and actual visual QA; publication has not passed verification.')
+        except (ValueError,RuntimeError) as exc:
+            if call.name not in {'wordpress_prepare','wordpress_snapshot','wordpress_verify','wordpress_artifacts'}:raise
+            return dict(ok=False,validation_error=str(exc),next='Correct the source or read-only verification issue and retry this same article. Never create duplicate posts or retry an uncertain external write.')
     if call.name in __import__('cloud_calls').NAMES:return await __import__('cloud_calls').execute(job,call,args,client)
     if job['scope']=='friend' and call.name in __import__('friend_work').NAMES:
         return await __import__('friend_work').execute(job,call,args,client)

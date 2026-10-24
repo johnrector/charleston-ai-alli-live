@@ -22,7 +22,7 @@ def test_publisher_rejects_friend_forgery_group_and_unassigned(monkeypatch,scope
     monkeypatch.setattr(publisher.jobs,'owner',lambda p:p=='owner')
     with pytest.raises(ValueError):publisher.owner_only(dict(scope=scope,phone=phone,context=dict(group_delegation=group,wordpress_authoring=assigned)))
 
-@pytest.mark.parametrize('html',['<button onclick="alert(1)">x</button>','<iframe src="https://example.com"></iframe>','<a href="javascript:alert(1)">x</a>','<form>private data</form>'])
+@pytest.mark.parametrize('html',['<button onclick="alert(1)">x</button>','<iframe src="https://example.com"></iframe>','<a href="javascript:alert(1)">x</a>','<form>private data</form>','<svg><a xlink:href="java&#10;script:alert(1)">x</a></svg>','<svg><set attributeName="href" to="javascript:alert(1)"></set></svg>','<a href="data:text/html,evil">x</a>','<meta http-equiv="refresh" content="0;url=https://example.com">'])
 def test_publisher_rejects_active_content(html):
     with pytest.raises(ValueError):publisher.safe_source(html)
 
@@ -90,3 +90,15 @@ def test_skill_upload_waits_for_real_availability_without_reupload(monkeypatch):
     assert client.skills.create.await_count==1 and client.skills.versions.retrieve.await_count==2
     assert client.containers.create.call_args.kwargs['network_policy']=={'type':'disabled'}
     assert job['context']['wordpress_skill_id']=='skill_test'
+
+def test_visual_failure_can_be_repaired_but_uncertain_publication_stops(monkeypatch):
+    from unittest.mock import AsyncMock
+    job=dict(id='TEST',scope='owner',phone='owner',context=dict(public_article=True,wordpress_authoring=True))
+    monkeypatch.setattr(work_agent.jobs,'read',lambda _:dict(state='running'))
+    monkeypatch.setattr(publisher.jobs,'owner',lambda p:p=='owner')
+    call=SimpleNamespace(name='wordpress_publish',arguments='{}',call_id='test')
+    monkeypatch.setattr(publisher,'execute',AsyncMock(side_effect=publisher.VisualValidationError('Heading clipped')))
+    result=asyncio.run(work_agent.execute(job,call))
+    assert result['ok'] is False and 'Heading clipped' in result['validation_error']
+    monkeypatch.setattr(publisher,'execute',AsyncMock(side_effect=ValueError('An earlier WordPress write is uncertain')))
+    with pytest.raises(ValueError,match='uncertain'):asyncio.run(work_agent.execute(job,call))
