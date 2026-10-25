@@ -19,6 +19,7 @@ from adapters.events import Events
 from adapters.computer import Computer
 from adapters.account_connections import AccountConnections
 from adapters.shopify import ShopifyAccount
+from adapters.text_conversation import TextConversation
 from adapters.bootstrap import seed_existing_records,preserve_birthday
 from adapters.telephony import MediaChannel
 from alli_core.authority import Actor,Conflict,PermissionDenied
@@ -57,13 +58,15 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
     computer=Computer.configured(repository,api)
     connections=AccountConnections(repository,settings.google_key.encode(),settings.base_url)
     shopify=ShopifyAccount(connections)
+    from adapters.scheduling import Scheduler
+    scheduler=Scheduler(repository,api,settings.google_key,settings.base_url)
     worker=Worker(repository,runtime,outbox,carrier,settings.base_url,calls=calls,computer=computer,
-                  release=settings.release)
+                  release=settings.release,scheduler=scheduler,text_conversation=TextConversation(repository,api))
     tools=tool_http_app(create_tool_server(repository,settings.base_url,
-        google=google,shopify=shopify,deliveries=outbox,calls=calls,carrier=carrier,computer=computer,connections=connections),settings.base_url)
+        google=google,shopify=shopify,deliveries=outbox,calls=calls,carrier=carrier,computer=computer,connections=connections,scheduler=scheduler),settings.base_url)
     oauth=OwnerOAuth(repository,settings.base_url,settings.session_secret,settings.google_key.encode())
     events=Events(repository,settings.google_key.encode(),settings.base_url)
-    owner_tools=owner_http_app(create_owner_server(repository,calls,outbox,oauth,events),settings.base_url)
+    owner_tools=owner_http_app(create_owner_server(repository,calls,outbox,oauth,events,scheduler=scheduler),settings.base_url)
     background=set()
 
     def spawn(coroutine):
@@ -129,7 +132,7 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
     app.state.calls,app.state.outbox,app.state.sessions,app.state.oauth=calls,outbox,sessions,oauth
     app.state.events=events
     app.add_middleware(ToolSurface,tools=tools,owner=owner_tools)
-    app.include_router(dashboard_router(settings,repository,sessions,carrier,outbox))
+    app.include_router(dashboard_router(settings,repository,sessions,carrier,outbox,scheduler=scheduler))
     app.include_router(account_router(settings,repository,sessions,connections,google,shopify))
 
     @app.exception_handler(PermissionDenied)
@@ -161,6 +164,7 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
     async def health():
         return JSONResponse({'ok':True,'runtime':'native_openai','release':settings.release,
             'configured_voice_model':repository.profile.voice_model,
+            'text_conversation':'responses','scheduler':'openai_native_automations',
             'configured_work_model':repository.profile.work_model,'reasoning':repository.profile.reasoning_effort},
             headers={'Cache-Control':'no-store'})
 
@@ -289,7 +293,8 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
             actor=Actor(repository.profile.id,str(person['id']),'sms',verified,
                         'signed-sms:'+data['MessageSid'])
             await asyncio.to_thread(repository.submit,actor,source_id='sms:'+data['MessageSid'],
-                title=' '.join(body.split())[:100],instruction=body,conversation_id=str(conversation['id']))
+                title=' '.join(body.split())[:100],instruction=body,conversation_id=str(conversation['id']),
+                context={'text_frontend':True})
         return Response('<Response/>',media_type='application/xml')
 
     @app.post('/transport/sms-status/{identifier}')

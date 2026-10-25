@@ -80,6 +80,15 @@ def test_input_saved_before_first_dispatch_does_not_strand_the_task(worker_setup
 
 
 @pytest.mark.asyncio
+async def test_delegated_backend_reads_original_request_with_authenticated_tool_context(worker_setup):
+    repo,owner,task,_,_,runtime,make_worker=worker_setup
+    await make_worker().dispatch(task)
+    assignment=runtime.dispatch.call_args.args[0]
+    assert assignment.input_text==task['instruction']
+    assert 'First read get_context' in assignment.instructions
+
+
+@pytest.mark.asyncio
 async def test_after_hangup_work_result_returns_to_existing_call_mission_once(worker_setup):
     from adapters.calls import CallRepository
     repo,owner,task,_,_,_,make_worker=worker_setup

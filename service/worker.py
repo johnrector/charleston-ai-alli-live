@@ -11,27 +11,36 @@ import httpx
 from twilio.base.exceptions import TwilioRestException
 
 from alli_core.managed import Assignment,ToolConnection
+from alli_core.authority import friend_tools
 
 
 log=logging.getLogger(__name__)
 
 
 class Worker:
-    def __init__(self,repository,runtime,outbox,carrier,base_url,*,calls=None,computer=None,release=''):
+    def __init__(self,repository,runtime,outbox,carrier,base_url,*,calls=None,computer=None,release='',scheduler=None,text_conversation=None):
         self.repository,self.runtime,self.outbox,self.carrier=repository,runtime,outbox,carrier
         self.base_url=base_url.rstrip('/')
         self.calls=calls
         self.computer=computer
         self.release=release
+        self.scheduler=scheduler
+        self.text_conversation=text_conversation
+        self.conversation_tasks={}
         self.stopping=asyncio.Event()
 
     async def dispatch(self,task):
+        if task['context'].get('native_schedule_setup'):return
+        if (self.text_conversation is not None and task['authority'].get('channel')=='sms'
+                and not task['context'].get('backend_only')):
+            await self.text_conversation.handle(task)
+            return
         execution=None
         if task['context'].get('execution')=='self_hosted':
             if not self.computer or not await asyncio.to_thread(self.computer.online):return
             execution=self.computer.execution(task)
         token=await asyncio.to_thread(self.repository.issue_tool_grant,task['id'])
-        allowed=None if task['scope']=='owner' else ('get_context','calendar_availability','calendar_events','book_meeting','call_person','end_phone_conversation')
+        allowed=None if task['scope']=='owner' else friend_tools(scheduled=task['authority'].get('channel')=='scheduled')
         constraints=task['authority'].get('allowed_tools')
         if constraints is not None:
             allowed=tuple(constraints) if allowed is None else tuple(tool for tool in allowed if tool in constraints)
@@ -43,6 +52,8 @@ class Worker:
         else:await self.runtime.dispatch(assignment,connection,execution)
 
     async def observe(self,task):
+        if task['context'].get('native_schedule_setup'):return
+        if task['context'].get('text_frontend'):return
         if not task['session_id']:
             await self.runtime.recover(Assignment(task['id'],task['instruction'],''))
             return
@@ -111,12 +122,13 @@ class Worker:
         await self.transport_tick()
 
     async def work_tick(self):
+        if self.text_conversation is not None:await self.text_conversation.recover()
         if self.computer is not None:await self.computer.forward()
         await self.forward_receipts()
         if self.calls is not None:
             await self.forward_calls()
             await self.forward_conversation_work()
-        for task in await asyncio.to_thread(self.repository.ready_tasks):
+        for task in await asyncio.to_thread(self.repository.ready_tasks,exclude_sms=self.text_conversation is not None):
             try:
                 await self.dispatch(task)
             except Exception as error:
@@ -126,6 +138,18 @@ class Worker:
                 await self.observe(task)
             except Exception as error:
                 log.warning('observe task=%s error=%s',task['id'],type(error).__name__)
+
+    async def conversation_tick(self):
+        for identifier,job in list(self.conversation_tasks.items()):
+            if job.done():
+                self.conversation_tasks.pop(identifier)
+                if not job.cancelled() and job.exception():
+                    log.warning('text_conversation task=%s error=%s',identifier,type(job.exception()).__name__)
+        capacity=8-len(self.conversation_tasks)
+        if capacity<=0:return
+        for task in await asyncio.to_thread(self.repository.ready_text_tasks,capacity):
+            if task['id'] not in self.conversation_tasks:
+                self.conversation_tasks[task['id']]=asyncio.create_task(self.text_conversation.handle(task))
 
     async def transport_tick(self):
         for _ in range(10):
@@ -197,7 +221,12 @@ class Worker:
         if not await self.wait_for_public_release():return
         # A slow/blocked reasoning provider cannot delay an already scheduled
         # text, call intent or completion notification. Both use durable claims.
-        await asyncio.gather(self._poll(self.work_tick,2),self._poll(self.transport_tick,1))
+        loops=[self._poll(self.work_tick,2),self._poll(self.transport_tick,1)]
+        if self.scheduler is not None:loops.append(self._poll(self.scheduler.reconcile,30))
+        if self.text_conversation is not None:loops.append(self._poll(self.conversation_tick,0.25))
+        try:await asyncio.gather(*loops)
+        finally:
+            if self.conversation_tasks:await asyncio.gather(*self.conversation_tasks.values(),return_exceptions=True)
 
     async def wait_for_public_release(self):
         if not self.release:return True

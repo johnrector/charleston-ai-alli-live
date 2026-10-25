@@ -157,7 +157,7 @@ class Events(Extension):
                     (self.repository.profile.id,sub['cursor'])).fetchall()
                 for row in rows:
                     state='needs_owner' if row['kind']=='task.approval_required' else row['kind'].removeprefix('task.')
-                    if (row['kind'] not in KINDS or state not in sub['filters']['states']
+                    if (row['facts'].get('conversation_reply') or row['kind'] not in KINDS or state not in sub['filters']['states']
                         or sub['filters'].get('task_id',row['task_id'])!=row['task_id']):continue
                     event_id='ea_'+hashlib.sha256((self.repository.profile.id+':'+str(row['id'])).encode()).hexdigest()
                     payload={'eventId':event_id,'name':NAME,'timestamp':row['created_at'].isoformat(),'cursor':None,

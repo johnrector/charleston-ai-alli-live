@@ -124,6 +124,46 @@ CREATE TABLE IF NOT EXISTS ea_commitment (
     CHECK(expires_at IS NULL OR expires_at>due_at)
 );
 CREATE INDEX IF NOT EXISTS ea_commitment_due ON ea_commitment(due_at) WHERE state='planned';
+-- Native OpenAI schedules define time; these rows retain authority and receipts.
+CREATE TABLE IF NOT EXISTS ea_schedule (
+    id text PRIMARY KEY,
+    assistant_id text NOT NULL REFERENCES ea_assistant(id),
+    person_id uuid NOT NULL,
+    source_task_id text NOT NULL REFERENCES ea_task(id),
+    source_id text NOT NULL,
+    title text NOT NULL,
+    instruction text NOT NULL,
+    timing jsonb NOT NULL,
+    authority jsonb NOT NULL,
+    state text NOT NULL DEFAULT 'creating',
+    provider_id text UNIQUE,
+    launch_digest text UNIQUE NOT NULL,
+    launch_sealed text NOT NULL,
+    control_state text NOT NULL DEFAULT '',
+    revision bigint NOT NULL DEFAULT 1,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(assistant_id,source_id),
+    FOREIGN KEY(assistant_id,person_id) REFERENCES ea_person(assistant_id,id)
+);
+CREATE TABLE IF NOT EXISTS ea_schedule_run (
+    invocation_id text PRIMARY KEY,
+    schedule_id text NOT NULL REFERENCES ea_schedule(id),
+    native_session_id text NOT NULL,
+    task_id text NOT NULL REFERENCES ea_task(id),
+    scheduled_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS ea_text_turn (
+    task_id text PRIMARY KEY REFERENCES ea_task(id),
+    state text NOT NULL DEFAULT 'generating',
+    response_id text,
+    response jsonb,
+    work_task_id text REFERENCES ea_task(id),
+    lease_until timestamptz NOT NULL DEFAULT now()+interval '90 seconds',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS ea_delivery (
     id text PRIMARY KEY,
     assistant_id text NOT NULL,

@@ -207,6 +207,13 @@ class DeliveryRepository:
             row=db.execute('''UPDATE ea_delivery SET provider_id=coalesce(provider_id,%s),state=%s,
                 receipt=coalesce(receipt,'{}'::jsonb) || %s,updated_at=now() WHERE id=%s RETURNING *''',
                 (provider_id,state,Jsonb(saved_receipt),delivery_id)).fetchone()
+            if row['source_id'].startswith('result:'):
+                task=self.repository._task(db,row['task_id'])
+                if task and task['context'].get('text_frontend') and task['conversation_id']:
+                    db.execute('''UPDATE ea_conversation SET transcript=(SELECT jsonb_agg(
+                        CASE WHEN part->>'source_id'=%s THEN part || %s ELSE part END ORDER BY ordinal)
+                        FROM jsonb_array_elements(transcript) WITH ORDINALITY AS items(part,ordinal))
+                        WHERE id=%s''',('text-front:'+task['id'],Jsonb({'delivery':state}),task['conversation_id']))
             if row['commitment_id'] and state in {'delivered','failed','uncertain'}:
                 db.execute('UPDATE ea_commitment SET state=%s,updated_at=now() WHERE id=%s',
                            ('completed' if state=='delivered' else 'blocked',row['commitment_id']))

@@ -2,6 +2,8 @@
 import asyncio
 import hmac
 import json
+from datetime import datetime,timezone
+from zoneinfo import ZoneInfo
 from urllib.parse import urlencode
 
 from fastapi import APIRouter,HTTPException,Request
@@ -15,7 +17,7 @@ SESSION='alli_owner_session'
 CHALLENGE='alli_owner_challenge'
 
 
-def dashboard_router(settings,repository,sessions,carrier,outbox):
+def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=None):
     router=APIRouter()
 
     async def owner(request: Request):
@@ -175,6 +177,20 @@ def dashboard_router(settings,repository,sessions,carrier,outbox):
         actor=await owner(request)
         rows=await asyncio.to_thread(repository.owner_commitments,actor)
         content='<h1>Promises and scheduled work.</h1>'
+        if scheduler is not None:
+            for item in await asyncio.to_thread(scheduler.list,actor):
+                content+='<article><small>OpenAI native schedule · '+e(item['state'])+'</small><h2>'+e(item['title'])+'</h2>'
+                when=item['timing']
+                if when['type']=='once':
+                    label=datetime.fromtimestamp(when['run_at'],timezone.utc).astimezone(ZoneInfo(repository.profile.timezone)).strftime('%A, %B %-d at %-I:%M %p %Z')
+                else:label='Recurring: '+when['expression']+' · '+when['timezone']
+                content+='<p>'+e(label)+'</p><pre>'+e(item['instruction'])+'</pre>'
+                if item['control_state']:content+='<p>Schedule change awaiting confirmation: '+e(item['control_state'])+'</p>'
+                for run in item['recent_runs']:
+                    content+='<p>Run: <a href="/dashboard/work/'+e(run['task_id'])+'">'+e(run['state'])+'</a> · '+e(run['scheduled_at'])+'</p>'
+                for action in (['pause','cancel'] if item['state']=='active' else ['resume','cancel'] if item['state']=='paused' else []):
+                    content+='<form method="post" action="/dashboard/schedules/'+e(item['id'])+'/'+action+'">'+hidden(request)+'<input type="hidden" name="revision" value="'+e(item['revision'])+'"><button>'+action.title()+' schedule</button></form>'
+                content+='</article>'
         for row in rows:
             content+='<article><small>'+e(row['state'])+' · '+e(row['due_at'])+'</small><pre>'+e(row['instruction'])+'</pre>'
             if row['state']=='planned':
@@ -186,6 +202,13 @@ def dashboard_router(settings,repository,sessions,carrier,outbox):
     async def cancel(request: Request,commitment_id):
         actor=await owner(request);data=await form(request);csrf(request,data)
         await asyncio.to_thread(outbox.cancel,actor,commitment_id,int(data['revision']))
+        return RedirectResponse('/dashboard/promises',303)
+
+    @router.post('/dashboard/schedules/{identifier}/{action}')
+    async def change_schedule(request:Request,identifier:str,action:str):
+        actor=await owner(request);data=await form(request);csrf(request,data)
+        if scheduler is None or action not in {'pause','resume','cancel'}:raise HTTPException(404)
+        await scheduler.manage(actor,identifier,int(data['revision']),action)
         return RedirectResponse('/dashboard/promises',303)
 
     return router

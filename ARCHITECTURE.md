@@ -14,8 +14,35 @@ system. Transport, storage and the private oversight dashboard support that role
   run a conversational workflow, decide intent, or hang up on voicemail detection.
 
 Use OpenAI's native SDK directly. OpenAI's managed Agents API owns the reasoning
-loop and durable sessions. No Twilio Agent Connect runtime, second local reasoning
-agent, custom step-count loop, article engine or visual-review workflow.
+loop and durable sessions. No Twilio Agent Connect runtime, custom step-count
+loop, article engine or visual-review workflow.
+
+## Text conversation and delegated work
+
+Identify the signed SMS sender by normalized phone number before asking the
+conversation model to speak. Supply the saved name and actual permissions;
+Blake Miller saying hi is Blake, never a request to authenticate as John.
+Recognition personalizes conversation and cannot grant owner authority.
+
+Use a compact Responses conversation with GPT-6.1 Sol/high. It answers chat or
+calls the single work-delegation function. It has no account tools. Save the
+original authorized request as a normal managed Agent assignment before sending
+the model's acknowledgment. Do not rewrite its authority from generated text.
+Managed work continues after the text interaction ends, with the same tools,
+receipts and Dot updates as phone work. A greeting starts no work Agent.
+
+This applies OpenAI's documented manager/specialist pattern to SMS; the Live
+guides describe a spoken frontend, not a separate documented SMS transport.
+Inference and transport failures are separate: resume a saved result without
+generating or delegating it twice, and retain original work if text inference
+fails. Serialize turns per person while independent conversations and work
+continue. Explicit silence applies only to the current assignment. The common
+outbox verifies actual carrier receipts; an acknowledgment is never work done.
+
+See [OpenAI agent orchestration](https://developers.openai.com/api/docs/guides/agents/orchestration#use-agents-as-tools-for-manager-style-workflows)
+and [latency guidance](https://developers.openai.com/api/docs/guides/latency-optimization).
+See [SCHEDULING.md](SCHEDULING.md) for native cloud scheduling and its distinct
+saved, invoked and completed states.
 
 ## Small, explicit boundaries
 

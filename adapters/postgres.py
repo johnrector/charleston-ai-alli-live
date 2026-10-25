@@ -1,6 +1,7 @@
 """Durable operational state, isolated from OpenAI, channels and provider clients."""
 import hashlib
 import json
+from contextlib import nullcontext
 from pathlib import Path
 from uuid import uuid4
 
@@ -149,6 +150,9 @@ class PostgresRepository:
                 db.execute('''UPDATE ea_task SET state='cancelled',updated_at=now()
                     WHERE assistant_id=%s AND person_id=%s AND state IN ('queued','working','waiting','needs_owner')''',
                     (self.profile.id, person_id))
+                db.execute('''UPDATE ea_schedule SET state='cancelled',control_state='contact_cancel',
+                    revision=revision+1,updated_at=now() WHERE assistant_id=%s AND person_id=%s
+                    AND state NOT IN ('cancelled','rejected','completed')''',(self.profile.id,person_id))
             elif row['status']=='known':
                 # Approval releases bounded recent requests in their existing
                 # friend scope; it never grants private owner access.
@@ -156,6 +160,7 @@ class PostgresRepository:
                     SELECT id FROM ea_task WHERE assistant_id=%s AND person_id=%s AND state='needs_owner'
                     AND created_at>now()-interval '7 days' ORDER BY created_at DESC LIMIT %s)''',
                     (self.profile.id,person_id,self.friend_active))
+            if status!='approved' or row['status']=='known':
                 db.execute('''UPDATE ea_delivery SET state='cancelled',updated_at=now()
                     WHERE assistant_id=%s AND person_id=%s AND state='queued' ''', (self.profile.id, person_id))
                 db.execute('''UPDATE ea_commitment SET state='cancelled',updated_at=now()
@@ -315,12 +320,13 @@ class PostgresRepository:
                 AND (%s::uuid IS NULL OR person_id=%s::uuid) ORDER BY id LIMIT %s''',
                 (self.profile.id, after, person_id, person_id, min(max(limit, 1), 500))).fetchall()
 
-    def submit(self, actor, *, source_id, title, instruction, context=None, conversation_id=None):
+    def submit(self, actor, *, source_id, title, instruction, context=None, conversation_id=None,reservation_id=None,transaction=None):
         if not 1 <= len(source_id) <= 200 or not 1 <= len(instruction) <= 200000 or not 1 <= len(title) <= 180:
             raise ValueError('Invalid assignment')
-        with self.connection() as db:
+        with (self.connection() if transaction is None else nullcontext(transaction)) as db:
             person = self._person(db, actor)
             db.execute('SELECT id FROM ea_person WHERE id=%s FOR UPDATE', (actor.person_id,))
+            person = self._person(db, actor)
             prior = db.execute('SELECT * FROM ea_task WHERE assistant_id=%s AND source_id=%s',
                                (self.profile.id, source_id)).fetchone()
             if prior:
@@ -334,12 +340,20 @@ class PostgresRepository:
                 if not conversation or not owner and (str(conversation['person_id'])!=actor.person_id
                         or conversation['scope']=='owner'):
                     raise PermissionDenied('Conversation does not belong to this requester')
-            if not owner:
+            if reservation_id:
+                reservation=db.execute('''SELECT authority FROM ea_schedule WHERE assistant_id=%s AND id=%s
+                    AND person_id=%s AND state IN ('active','completed')''',
+                    (self.profile.id,reservation_id,actor.person_id)).fetchone()
+                if not reservation or bool(reservation['authority'].get('verified_owner'))!=owner:
+                    raise PermissionDenied('Invalid standing-work reservation')
+            if not owner and not reservation_id:
+                conversational=bool((context or {}).get('text_frontend'))
                 count = db.execute('''SELECT count(*) FILTER(WHERE state IN ('queued','working','waiting','needs_owner')) AS active,
                     count(*) FILTER(WHERE created_at>now()-interval '24 hours') AS recent
-                    FROM ea_task WHERE assistant_id=%s AND person_id=%s''',
-                    (self.profile.id, actor.person_id)).fetchone()
-                if count['active'] >= self.friend_active or count['recent'] >= self.friend_daily:
+                    FROM ea_task WHERE assistant_id=%s AND person_id=%s
+                    AND (context @> '{"text_frontend":true}'::jsonb)=%s''',
+                    (self.profile.id, actor.person_id,conversational)).fetchone()
+                if count['active'] >= self.friend_active or count['recent'] >= self.friend_daily*(10 if conversational else 1):
                     raise PermissionDenied('Please finish existing assignments before adding more work')
             task_id = uuid4().hex
             row = db.execute('''INSERT INTO ea_task(id,assistant_id,person_id,conversation_id,source_id,title,
@@ -421,9 +435,19 @@ class PostgresRepository:
 
     def claim_dispatch(self, task_id):
         with self.connection() as db:
+            task=self._task(db,task_id)
+            if not task:return False
+            db.execute('SELECT id FROM ea_person WHERE id=%s FOR UPDATE',(task['person_id'],))
             task = self._task(db, task_id, lock=True)
             if not task or not self._permitted(db, task_id, writes=False):
                 return False
+            if task['scope']=='friend':
+                active=db.execute('''SELECT count(*) AS count FROM ea_task WHERE assistant_id=%s
+                    AND person_id=%s AND id<>%s AND state IN ('working','waiting')
+                    AND NOT context @> '{"text_frontend":true}'::jsonb
+                    AND NOT context @> '{"native_schedule_setup":true}'::jsonb''',
+                    (self.profile.id,task['person_id'],task_id)).fetchone()['count']
+                if active>=self.friend_active:return False
             row = db.execute('''UPDATE ea_agent_run SET dispatch_state='creating',updated_at=now()
                 WHERE task_id=%s AND dispatch_state='ready' AND session_id IS NULL RETURNING task_id''',
                 (task_id,)).fetchone()
@@ -570,6 +594,7 @@ class PostgresRepository:
             db.execute('UPDATE ea_agent_run SET turn_id=%s,updated_at=now() WHERE task_id=%s', (turn_id, task_id))
             self._event(db, 'task:'+task_id+':turn:'+turn_id, 'task.'+state,
                         {'summary': text, 'remaining':list(remaining), 'notify_requested':notify,
+                         'conversation_reply':bool(task['context'].get('text_frontend')),
                          'turn_id': turn_id, 'unresolved_actions': unresolved,
                          'provider_error':provider_error},
                         person_id=task['person_id'], task_id=task_id)
@@ -677,7 +702,9 @@ class PostgresRepository:
             budget=24000
             excerpts=[]
             for item in history:
-                text='\n'.join(str(part.get('role',''))+': '+str(part.get('text',''))
+                text='\n'.join(str(part.get('role',''))+
+                               (' [delivery '+str(part['delivery'])+']' if part.get('delivery') and part['delivery']!='delivered' else '')+
+                               ': '+str(part.get('text',''))
                                for part in item['transcript'] if isinstance(part,dict))
                 excerpt=text[-min(6000,budget):] if budget else ''
                 if not excerpt:continue
@@ -698,7 +725,9 @@ class PostgresRepository:
             return {'assistant':self.profile.name,'principal':self.profile.principal,
                 'approved_public_facts':self.profile.public_facts,'facts_reviewed_at':self.profile.facts_reviewed_at,
                 'requester':{'id':str(task['person_id']),'name':person['name'],'email':person['email']},
-                'scope':task['scope'],'received_at':task['created_at'].isoformat(),
+                'scope':task['scope'],'received_at':task['context'].get('requested_at') or task['created_at'].isoformat(),
+                'scheduled_occurrence':{k:task['context'][k] for k in
+                    ('native_schedule_id','native_invocation_id','scheduled_at','schedule_revision') if k in task['context']},
                 'contact_channel_verified':task['authority'].get('proof_id','').startswith(('signed-sms:','verified-phone:')),
                 'now':datetime.now(timezone.utc).isoformat(),'timezone':self.profile.timezone,
                 'instruction':task['instruction'],'remaining':task['context'].get('remaining',[]),
@@ -725,17 +754,36 @@ class PostgresRepository:
                     AND (%s OR scope='friend') ORDER BY created_at DESC LIMIT 6''',
                     (self.profile.id,task['person_id'],task_id,task['scope']=='owner')).fetchall()}
 
-    def ready_tasks(self,limit=10):
+    def ready_tasks(self,limit=10,*,exclude_sms=False):
         with self.connection() as db:
             return db.execute('''SELECT t.* FROM ea_task t JOIN ea_person p ON p.id=t.person_id
                 WHERE t.assistant_id=%s AND t.state='queued' AND t.available_at<=now() AND p.status='approved'
-                ORDER BY t.created_at LIMIT %s''',(self.profile.id,min(max(limit,1),50))).fetchall()
+                AND NOT t.context @> '{"native_schedule_setup":true}'::jsonb
+                AND (NOT %s OR t.authority->>'channel'<>'sms' OR t.context @> '{"backend_only":true}'::jsonb)
+                AND (t.scope='owner' OR (SELECT count(*) FROM ea_task running WHERE running.assistant_id=t.assistant_id
+                    AND running.person_id=t.person_id AND running.state IN ('working','waiting')
+                    AND NOT running.context @> '{"text_frontend":true}'::jsonb
+                    AND NOT running.context @> '{"native_schedule_setup":true}'::jsonb)<%s)
+                ORDER BY t.created_at LIMIT %s''',(self.profile.id,exclude_sms,self.friend_active,min(max(limit,1),50))).fetchall()
+
+    def ready_text_tasks(self,limit=8):
+        with self.connection() as db:
+            return db.execute('''SELECT * FROM (
+                SELECT DISTINCT ON(t.person_id) t.* FROM ea_task t JOIN ea_person p ON p.id=t.person_id
+                WHERE t.assistant_id=%s AND t.state='queued' AND t.available_at<=now() AND p.status='approved'
+                AND t.authority->>'channel'='sms' AND NOT t.context @> '{"backend_only":true}'::jsonb
+                AND NOT t.context @> '{"native_schedule_setup":true}'::jsonb
+                ORDER BY t.person_id,t.created_at) requests ORDER BY created_at LIMIT %s''',
+                (self.profile.id,min(max(limit,1),8))).fetchall()
 
     def active_runs(self,limit=50):
         with self.connection() as db:
             return db.execute('''SELECT t.*,r.session_id,r.dispatch_state FROM ea_task t
                 JOIN ea_agent_run r ON r.task_id=t.id WHERE t.assistant_id=%s
-                AND t.state IN ('working','waiting') ORDER BY r.updated_at LIMIT %s''',
+                AND t.state IN ('working','waiting')
+                AND NOT t.context @> '{"native_schedule_setup":true}'::jsonb
+                AND NOT t.context @> '{"text_frontend":true}'::jsonb
+                ORDER BY r.updated_at LIMIT %s''',
                 (self.profile.id,min(max(limit,1),100))).fetchall()
 
     def unforwarded_conversation_work(self):
