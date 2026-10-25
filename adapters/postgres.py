@@ -684,6 +684,17 @@ class PostgresRepository:
                 excerpts.append({'channel':item['channel'],'started_at':item['started_at'].isoformat(),
                                  'excerpt':excerpt,'truncated':len(excerpt)<len(text)})
                 budget-=len(excerpt)
+            # Discover persistent owner knowledge independently of recent task
+            # history, without copying unrelated private record bodies into it.
+            collections=[]
+            if task['scope']=='owner':
+                collections=[{'collection_id':str(row['id']),'name':row['name'],
+                    'active_records':row['active_records']} for row in db.execute('''
+                    SELECT c.id,c.name,count(r.id) AS active_records FROM ea_collection c
+                    LEFT JOIN ea_record r ON r.collection_id=c.id AND r.assistant_id=c.assistant_id
+                        AND r.deleted_at IS NULL
+                    WHERE c.assistant_id=%s GROUP BY c.id,c.name ORDER BY c.name,c.id''',
+                    (self.profile.id,)).fetchall()]
             return {'assistant':self.profile.name,'principal':self.profile.principal,
                 'approved_public_facts':self.profile.public_facts,'facts_reviewed_at':self.profile.facts_reviewed_at,
                 'requester':{'id':str(task['person_id']),'name':person['name'],'email':person['email']},
@@ -693,6 +704,7 @@ class PostgresRepository:
                 'instruction':task['instruction'],'remaining':task['context'].get('remaining',[]),
                 'current_conversation':conversation,
                 'recent_conversations':excerpts,
+                'saved_record_collections':collections,
                 'action_receipts':db.execute('''SELECT task_id,tool,state,arguments,receipt FROM ea_action a
                     WHERE a.writes AND (a.task_id=%s OR EXISTS
                         (SELECT 1 FROM ea_task t JOIN ea_phone_call c ON c.conversation_id=t.conversation_id

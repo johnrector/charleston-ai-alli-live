@@ -101,6 +101,45 @@ def test_collection_access_is_owner_only_and_assistant_bound(setup, database):
     assert repo.records(owner, str(collection['id']))[0]['body'] == {'secret':'owner only'}
 
 
+@pytest.mark.parametrize('channel',['dot','sms','phone'])
+def test_saved_record_discovery_survives_restart_without_recent_history(setup,database,channel):
+    repo,owner=setup
+    collection=repo.create_collection(owner,'Operational preferences',{'type':'object'})
+    record=repo.put_record(owner,str(collection['id']),{'final_destination':'Saved private address'})
+    removed=repo.put_record(owner,str(collection['id']),{'obsolete':True})
+    repo.delete_record(owner,str(removed['id']),removed['revision'])
+    task=repo.submit(replace(owner,channel=channel),source_id='brief-request',
+        title='A short request',instruction='Email me my delivery route')
+    restarted=PostgresRepository(database,repo.profile)
+    context=restarted.task_context(task['id'])
+    assert context['recent_work']==[] and context['recent_conversations']==[]
+    assert context['saved_record_collections']==[{'collection_id':str(collection['id']),
+        'name':'Operational preferences','active_records':1}]
+    # The index points to live data, not a stale copy in the task context.
+    repo.put_record(owner,str(collection['id']),{'final_destination':'Updated private address'},
+        record_id=str(record['id']),revision=record['revision'])
+    assert restarted.records(owner,str(collection['id']))[0]['body']['final_destination']=='Updated private address'
+    assert 'private address' not in str(context)
+
+
+def test_private_collection_index_is_not_exposed_to_contacts_or_unverified_owner(setup,database):
+    repo,owner=setup
+    collection=repo.create_collection(owner,'Private owner business rules',{'type':'object'})
+    repo.put_record(owner,str(collection['id']),{'private':'owner-only'})
+    contact=friend(repo,owner)
+    for number,actor in enumerate([contact,replace(owner,verified_owner=False,proof_id='')]):
+        task=repo.submit(actor,source_id='private-index-'+str(number),title='Public task',instruction='Do public work')
+        context=repo.task_context(task['id'])
+        assert context['scope']=='friend'
+        assert context['saved_record_collections']==[]
+        assert 'Private owner business rules' not in str(context)
+    other=PostgresRepository(database,replace(repo.profile,id='other-assistant'))
+    other.initialize()
+    other_owner=Actor('other-assistant',other.bootstrap_owner('+18435550104'),'dot',True,'verified-other')
+    task=other.submit(other_owner,source_id='other-index',title='Own task',instruction='Read my records')
+    assert other.task_context(task['id'])['saved_record_collections']==[]
+
+
 def test_new_contacts_do_not_gain_approval_or_owner_authority(setup):
     repo, owner = setup
     person = repo.save_person(owner, name='John Rector', phone='+18435550103')
