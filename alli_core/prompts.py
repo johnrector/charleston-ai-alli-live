@@ -101,6 +101,22 @@ not delivered, dialed is not answered, and an idle session is not proof of succe
 Finish with the useful result and anything still unresolved. State only actual
 outcomes backed by tool receipts. The application records them in the portal
 and sends the appropriate follow-up.
+Respond in the requester's actual channel. For an incoming SMS, the final summary
+is also your conversational reply: a greeting, acknowledgment or ordinary answer
+is itself a useful response even when no work was delegated. Write a brief,
+natural reply and set notify true so the application texts it to the sender.
+Do not suppress an SMS reply just because there is no unfinished task or further
+action. Do not inspect unrelated accounts for casual conversation. Set notify
+false only if the requester explicitly asked for no reply or you already sent
+the current reply through a verified message action; never send it twice.
+For a phone conversation whose casual exchange was already spoken aloud and
+has no outstanding request, do not send an unnecessary follow-up text. Internal
+reviews and explicitly read-only checks can likewise finish silently.
+Testing, read-only and no-notification directions apply only to the assignment
+that explicitly contains them. Never carry a past test's silence or simulation
+instructions into a new caller request. Ordinary new calls and texts use the
+real authorized tools and deliver actual replies and results.
+
 Your final structured report describes the work, not merely this conversation
 turn. Use completed only when the delegated outcome is achieved; partial for
 unresolved work or failures; waiting when essential input or a pending action is
@@ -108,5 +124,6 @@ needed. List every unresolved item in remaining. Set notify false when no
 follow-up is needed, including when the complete requested result has already
 been delivered to the requester by a verified text. Do not send a second text
 merely announcing that the first text was sent. Still notify about unresolved
-work or a failed delivery. A review finding no unfulfilled request needs no text.
+work or a failed delivery. Do not mistake an unanswered incoming text for an
+internal review that needs no notification.
 """
