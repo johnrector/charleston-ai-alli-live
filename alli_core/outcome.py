@@ -32,4 +32,10 @@ class Outcome(BaseModel):
     @classmethod
     def format(cls):
         # Agents API's format schema differs from Responses: no name/strict.
-        return {'type':'json_schema','schema':cls.model_json_schema()}
+        # Every wire property must be required, including fields whose parsing
+        # defaults let an older saved native session finish after deployment.
+        schema=cls.model_json_schema()
+        schema['required']=list(schema['properties'])
+        for field in schema['properties'].values():
+            field.pop('default',None)
+        return {'type':'json_schema','schema':schema}

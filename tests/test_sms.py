@@ -46,6 +46,9 @@ def test_older_sessions_and_oversized_notices_remain_sendable_without_false_succ
 def test_outcome_supports_legacy_reports_and_bounds_new_notice():
     old=dict(status='completed', summary='Full useful result', remaining=[], notify=True)
     assert Outcome(**old).notification == ''
+    schema=Outcome.format()['schema']
+    assert set(schema['required'])==set(schema['properties'])
+    assert 'default' not in schema['properties']['notification']
     assert Outcome(**old, notification='The result is ready.').summary == old['summary']
     with pytest.raises(ValidationError):
         Outcome(**old, notification='A'*161)
