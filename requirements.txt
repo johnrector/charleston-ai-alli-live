@@ -2,6 +2,7 @@ openai[realtime]==3.37.0
 fastapi==0.161.1
 uvicorn==0.54.0
 psycopg[binary]==3.3.6
+psycopg-pool==3.3.3
 cryptography==50.0.2
 httpx==0.28.1
 twilio==9.12.0

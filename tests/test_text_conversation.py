@@ -12,9 +12,12 @@ from alli_core.profile import Profile
 from service.worker import Worker
 
 
-@pytest.fixture
-def setup(database):
-    repo=PostgresRepository(database,Profile.load('profiles/alli.toml'));repo.initialize()
+@pytest.fixture(params=[False,True],ids=['direct','pooled'])
+def setup(database,request):
+    repo=PostgresRepository(database,Profile.load('profiles/alli.toml'))
+    if request.param:repo.open(max_size=1)
+    request.addfinalizer(repo.close)
+    repo.initialize()
     owner=Actor('alli',repo.bootstrap_owner('+18435550100'),'sms',True,'signed-sms:owner')
     person=repo.save_person(owner,name='Blake Miller',phone='+18435550103')
     repo.set_person_status(owner,str(person['id']),'approved',person['revision'])

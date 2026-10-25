@@ -80,7 +80,7 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
         return task
 
     @asynccontextmanager
-    async def lifespan(app):
+    async def serving(app):
         await asyncio.to_thread(repository.initialize)
         owner_id=await asyncio.to_thread(repository.bootstrap_owner,settings.owner_phone)
         if settings.background and settings.native_probe:
@@ -126,6 +126,15 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
                     for task in pending:task.cancel()
                     await asyncio.gather(*pending,return_exceptions=True)
                 await api.close()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        await asyncio.to_thread(repository.open)
+        log.warning('postgres_pool_ready max_connections=4')
+        try:
+            async with serving(app):yield
+        finally:
+            await asyncio.to_thread(repository.close)
 
     app=FastAPI(lifespan=lifespan,docs_url=None,redoc_url=None,openapi_url=None)
     app.state.repository,app.state.worker=repository,worker

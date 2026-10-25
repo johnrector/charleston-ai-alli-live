@@ -109,6 +109,12 @@ acknowledgment confirms delivery, not completion of work in Dot.
 
 ## Persistence and recovery
 
+The service opens one bounded Psycopg connection pool for its lifespan and
+closes it after the workers stop. Each repository operation still has its own
+transaction and reads current database state. Shared transactions create work
+and its launch receipt atomically. Reusing a connection never retries an
+uncertain provider action or caches a prior query result.
+
 Save task state and action claims before external writes. Save actual receipts
 afterward. Reuse a completed action's receipt after restart. A write interrupted
 without a receipt is uncertain and requires review; it must not be retried under

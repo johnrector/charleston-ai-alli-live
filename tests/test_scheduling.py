@@ -43,9 +43,12 @@ class Native:
         return invocation
 
 
-@pytest.fixture
-def setup(database):
-    repo=PostgresRepository(database,Profile.load('profiles/alli.toml'));repo.initialize()
+@pytest.fixture(params=[False,True],ids=['direct','pooled'])
+def setup(database,request):
+    repo=PostgresRepository(database,Profile.load('profiles/alli.toml'))
+    if request.param:repo.open(max_size=1)
+    request.addfinalizer(repo.close)
+    repo.initialize()
     owner=Actor('alli',repo.bootstrap_owner('+18435550100'),'sms',True,'signed-owner')
     task=repo.submit(owner,source_id='owner-schedule-request',title='Future work',instruction='Do future work')
     api=NS(with_options=lambda **kw:api)

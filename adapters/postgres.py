@@ -8,6 +8,7 @@ from uuid import uuid4
 import phonenumbers
 import psycopg
 from psycopg.rows import dict_row
+from psycopg_pool import ConnectionPool
 from psycopg.types.json import Jsonb
 from jsonschema import Draft202012Validator
 
@@ -19,8 +20,26 @@ class PostgresRepository:
     def __init__(self, dsn, profile, *, friend_active=3, friend_daily=10):
         self.dsn, self.profile = dsn, profile
         self.friend_active, self.friend_daily = friend_active, friend_daily
+        self.pool=None
+
+    def open(self,*,max_size=4):
+        if self.pool is not None:return
+        pool=ConnectionPool(self.dsn,open=False,min_size=1,max_size=max_size,timeout=10,
+            kwargs={'row_factory':dict_row,'connect_timeout':10},
+            check=ConnectionPool.check_connection,name=self.profile.id+'-postgres')
+        try:pool.open(wait=True,timeout=10)
+        except BaseException:
+            pool.close()
+            raise
+        self.pool=pool
+
+    def close(self):
+        if self.pool is not None:
+            self.pool.close()
+            self.pool=None
 
     def connection(self):
+        if self.pool is not None:return self.pool.connection()
         return psycopg.connect(self.dsn, row_factory=dict_row, connect_timeout=10)
 
     def initialize(self):

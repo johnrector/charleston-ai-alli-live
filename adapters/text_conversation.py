@@ -91,6 +91,7 @@ class TextConversation:
             db.execute("UPDATE ea_text_turn SET state='done',updated_at=now() WHERE task_id=%s",(task_id,))
 
     async def handle(self,task):
+        claim_started=time.monotonic()
         turn=await asyncio.to_thread(self.claim,task['id'])
         if not turn:return
         if turn['state']=='done':return
@@ -98,6 +99,7 @@ class TextConversation:
         started=time.monotonic()
         try:
             context=await asyncio.to_thread(self.repository.task_context,task['id'])
+            context_ready=time.monotonic()
             profile=self.repository.profile
             public={'name':profile.name,'principal':profile.principal,'timezone':profile.timezone,
                 'approved_public_facts':profile.public_facts,'facts_reviewed_at':profile.facts_reviewed_at}
@@ -136,6 +138,7 @@ class TextConversation:
                 input=json.dumps(request,default=str),tools=[DELEGATE,SILENT],parallel_tool_calls=False,
                 text={'verbosity':'low'},store=False,
                 safety_identifier=hashlib.sha256((profile.id+':'+str(task['person_id'])).encode()).hexdigest())
+            inferred=time.monotonic()
             calls=[i for i in response.output if i.type=='function_call']
             if calls:
                 if len(calls)!=1:raise ValueError('Unexpected conversation tool')
@@ -151,8 +154,10 @@ class TextConversation:
             if not result['text'] or len(result['text'])>1000:raise ValueError('Invalid conversational reply')
             await asyncio.to_thread(self.save,task['id'],response.id,result)
             await asyncio.to_thread(self.finish,task['id'])
-            log.warning('text_frontend task=%s response=%s route=%s elapsed_ms=%d',task['id'],response.id,
-                result['kind'],(time.monotonic()-started)*1000)
+            log.warning('text_frontend task=%s response=%s route=%s elapsed_ms=%d claim_ms=%d context_ms=%d inference_ms=%d persist_ms=%d',
+                task['id'],response.id,result['kind'],(time.monotonic()-started)*1000,
+                (started-claim_started)*1000,(context_ready-started)*1000,
+                (inferred-context_ready)*1000,(time.monotonic()-inferred)*1000)
         except PermissionDenied:
             await asyncio.to_thread(self.block,task['id'])
         except Exception as error:
