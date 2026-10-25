@@ -27,7 +27,8 @@ def build_application():
         client_id=os.environ['GOOGLE_CLIENT_ID'],client_secret=os.environ['GOOGLE_CLIENT_SECRET']),profile,
         sender_email=os.environ.get('GOOGLE_SENDER_EMAIL') or profile.email_sender or settings.sender_email,
         owner_email=settings.owner_email)
-    return create_application(settings,repository,carrier,google,AsyncOpenAI(timeout=30,max_retries=0))
+    return create_application(settings,repository,carrier,google,AsyncOpenAI(timeout=30,max_retries=0),
+        shopify_setup=os.environ.get('ALLI_SHOPIFY_APP_SETUP',''))
 
 
 if __name__=='__main__':

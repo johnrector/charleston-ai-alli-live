@@ -47,6 +47,28 @@ class ShopifyAccount:
     def __init__(self,connections):
         self.connections,self.repository=connections,connections.repository
 
+    def configure(self,actor,credentials):
+        """Import trusted deployment configuration without exposing a new endpoint.
+
+        This is for an owner-authorized operator using the existing hosting
+        administration. Ordinary conversations never receive these credentials.
+        Repeated deploys must not replace an already imported matching grant.
+        """
+        if (not isinstance(credentials,dict) or set(credentials)!={'shop','client_id','client_secret'} or
+            any(not isinstance(value,str) for value in credentials.values())):
+            raise InvalidInput('Invalid deployment account configuration')
+        values={key:value.strip() for key,value in credentials.items()}
+        values['shop']=shop_domain(values['shop'])
+        with self.repository.connection() as db:
+            self.repository._person(db,actor,owner=True)
+            row=db.execute('''SELECT sealed FROM ea_account_secret WHERE assistant_id=%s
+                AND provider='shopify' ''',(self.repository.profile.id,)).fetchone()
+        if row:
+            saved=json.loads(self.connections.cipher.decrypt(row['sealed'].encode()))
+            if all(saved.get(key)==value for key,value in values.items()):return False
+        self.connect(actor,**values)
+        return True
+
     def exchange(self,credentials):
         # The app and store must belong to the same Shopify organization.
         # Shopify grants 24-hour tokens; renew before expiry, never in a prompt.

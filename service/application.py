@@ -49,7 +49,7 @@ class ToolSurface:
             await self.app(scope,receive,send)
 
 
-def create_application(settings,repository,carrier,google,api):
+def create_application(settings,repository,carrier,google,api,*,shopify_setup=''):
     calls=CallRepository(repository,settings.phone)
     outbox=DeliveryRepository(repository)
     sessions=OwnerSessions(repository,settings.session_secret)
@@ -79,7 +79,7 @@ def create_application(settings,repository,carrier,google,api):
     @asynccontextmanager
     async def lifespan(app):
         await asyncio.to_thread(repository.initialize)
-        await asyncio.to_thread(repository.bootstrap_owner,settings.owner_phone)
+        owner_id=await asyncio.to_thread(repository.bootstrap_owner,settings.owner_phone)
         if settings.background and settings.native_probe:
             from tools.probe_native_openai import agent_probe,live_probe
             brain,voice=await asyncio.gather(agent_probe(),live_probe())
@@ -96,6 +96,15 @@ def create_application(settings,repository,carrier,google,api):
             await asyncio.to_thread(google.availability,begin.isoformat(),finish.isoformat())
             await asyncio.to_thread(google.events,begin.isoformat(),finish.isoformat())
             log.warning('google_calendar_readiness=verified')
+        if shopify_setup:
+            actor=Actor(repository.profile.id,str(owner_id),'operator',True,'deployment:'+settings.release)
+            try:
+                if len(shopify_setup)>4096:raise ValueError('Invalid deployment configuration')
+                await asyncio.to_thread(shopify.configure,actor,json.loads(shopify_setup))
+                log.warning('shopify_cloud_setup=verified')
+            except Exception as error:
+                await asyncio.to_thread(connections.failed,actor,'shopify','deployment_setup',error)
+                log.warning('shopify_cloud_setup=failed error=%s',type(error).__name__)
         await asyncio.to_thread(seed_existing_records,repository)
         await asyncio.to_thread(preserve_birthday,repository)
         async with tools.router.lifespan_context(tools),owner_tools.router.lifespan_context(owner_tools):

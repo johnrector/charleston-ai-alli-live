@@ -32,6 +32,16 @@ private form. Read scopes: `read_orders`, `read_products`, `read_inventory`,
 before the provider's 24-hour expiry and is serialized with a database row lock.
 No Mac or ChatGPT connector session is involved.
 
+An authorized operator can also complete the same verified import through the
+existing hosting administration, without copying secrets into a conversation.
+`ALLI_SHOPIFY_APP_SETUP` accepts a private JSON object with `shop`, `client_id`
+and `client_secret`. Startup binds the import to the actual approved owner,
+verifies the store and order access, and uses the same encrypted account store.
+A matching prior import is a no-op. Malformed or rejected configuration is
+audited without logging credentials and does not disable other assistant work.
+Clear this temporary environment value after verifying the import. Do not
+expose an import endpoint or give a model hosting-administration permissions.
+
 The adapter only handles credentials and account I/O. The OpenAI managed agent,
 GPT-6.1 Sol/high, chooses and reasons about queries using `shopify_schema` and
 `shopify_query` through the existing executive MCP server. Admin API version is

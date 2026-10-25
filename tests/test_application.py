@@ -31,11 +31,44 @@ def application_setup(database):
     message=MessageInstance(None,{'sid':'SM'+'2'*32,'status':'queued','from':PHONE,'to':OWNER},ACCOUNT)
     sdk=NS(messages=NS(create=Mock(return_value=message)))
     carrier=Carrier(sdk,account_sid=ACCOUNT,auth_token=SECRET,phone=PHONE,base_url=BASE)
-    def build():
+    def build(**options):
         api=NS(close=AsyncMock())
         api.with_options=lambda **kwargs:api
-        return create_application(settings,repository,carrier,None,api)
+        return create_application(settings,repository,carrier,None,api,**options)
     return repository,sdk,build
+
+
+@pytest.mark.asyncio
+async def test_bad_operator_account_configuration_does_not_disable_the_assistant(application_setup):
+    from alli_core.authority import Actor
+    repository,_,build=application_setup
+    app=build(shopify_setup='{"client_secret":"PRIVATE-INVALID-SETUP"}')
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url=BASE) as http:
+            assert (await http.get('/healthz')).status_code==200
+        owner=Actor('alli',repository.bootstrap_owner(OWNER),'dashboard',True,'test-owner')
+        events=repository.ledger(owner)
+        assert any(item['kind']=='account.connection_failed' and
+                   item['facts']['stage']=='deployment_setup' for item in events)
+        assert 'PRIVATE-INVALID-SETUP' not in str(events)
+
+
+@pytest.mark.asyncio
+async def test_operator_account_import_binds_the_actual_owner_without_a_new_public_auth_path(application_setup,monkeypatch):
+    import json
+    from adapters.shopify import ShopifyAccount
+    repository,_,build=application_setup
+    calls=[]
+    def configure(self,actor,credentials):calls.append((actor,credentials));return True
+    monkeypatch.setattr(ShopifyAccount,'configure',configure)
+    values={'shop':'red604.myshopify.com','client_id':'private-test-app-id','client_secret':'private-test-secret'}
+    app=build(shopify_setup=json.dumps(values))
+    async with app.router.lifespan_context(app):
+        actor,received=calls[0]
+        assert actor.verified_owner and actor.person_id==repository.bootstrap_owner(OWNER)
+        assert actor.channel=='operator' and received==values
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url=BASE) as http:
+            assert (await http.get('/dashboard/connections')).status_code==303
 
 
 async def carrier_post(http,path,data,*,valid=True):

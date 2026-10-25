@@ -97,3 +97,24 @@ def test_partial_shopify_errors_and_pagination_remain_visible_to_the_model(accou
     result=shopify.query('query { orders(first:1) { nodes { id } pageInfo { hasNextPage endCursor } } }')
     assert not result['ok'] and result['errors'] and result['extensions']['cost']['actualQueryCost']==2
     assert result['data']['orders']['pageInfo']['hasNextPage']
+
+
+def test_trusted_operator_import_reuses_matching_credentials_without_network_calls(account,monkeypatch):
+    _,owner,links,shopify,secret=account
+    values={key:secret[key] for key in ('shop','client_id','client_secret')}
+    monkeypatch.setattr(shopify,'connect',lambda *args,**kwargs:pytest.fail('Matching setup unexpectedly reconnected'))
+    assert shopify.configure(owner,values) is False
+    assert links.get('shopify')['store']=='Original store'
+
+
+def test_operator_import_rejects_friend_and_malformed_configuration(account,monkeypatch):
+    from alli_core.authority import PermissionDenied
+    repo,owner,_,shopify,secret=account
+    person=repo.save_person(owner,name='Friend',phone='+18435550111')
+    repo.set_person_status(owner,str(person['id']),'approved',person['revision'])
+    friend=Actor('alli',str(person['id']),'sms')
+    values={key:secret[key] for key in ('shop','client_id','client_secret')}
+    monkeypatch.setattr(shopify,'connect',lambda *args,**kwargs:pytest.fail('Rejected setup reached provider'))
+    with pytest.raises(PermissionDenied):shopify.configure(friend,values)
+    for invalid in ({'client_secret':'secret'},'not an object',{**values,'access_token':'injected'}):
+        with pytest.raises(InvalidInput):shopify.configure(owner,invalid)
