@@ -7,6 +7,7 @@ from adapters.deliveries import DeliveryRepository
 from adapters.postgres import PostgresRepository
 from alli_core.authority import Actor,Conflict,PermissionDenied
 from alli_core.profile import Profile
+from adapters.errors import InvalidInput
 
 
 @pytest.fixture
@@ -17,6 +18,16 @@ def delivery_setup(database):
     recipient=repo.save_person(owner,name='Test recipient',phone='+18435550101')
     task=repo.submit(owner,source_id='owner-text',title='Send a text',instruction='Send the requested message')
     return repo,owner,str(recipient['id']),task,DeliveryRepository(repo)
+
+
+def test_oversized_unicode_is_rejected_before_outbox_or_schedule(delivery_setup):
+    repo,owner,recipient,task,outbox=delivery_setup
+    with pytest.raises(InvalidInput):
+        outbox.queue_text(task['id'],recipient,'“'*1100,'oversized',
+                          at=datetime.now(timezone.utc)+timedelta(hours=1))
+    assert outbox.read(owner)==[]
+    with repo.connection() as db:
+        assert db.execute('SELECT count(*) AS n FROM ea_commitment').fetchone()['n']==0
 
 
 def test_scheduled_text_survives_new_repository_without_early_delivery(delivery_setup):

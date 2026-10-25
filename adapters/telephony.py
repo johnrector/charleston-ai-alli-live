@@ -46,6 +46,8 @@ class Carrier:
                 'status':call.status,'to':call.to,'from':call._from}
 
     async def send(self,to,body,*,status_path):
+        from .sms import validate
+        validate(body)
         if to == self.phone:
             raise ValueError('The assistant cannot message her own service number')
         message=await asyncio.to_thread(self.client.messages.create,to=to,from_=self.phone,

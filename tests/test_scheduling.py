@@ -376,5 +376,9 @@ async def test_dot_future_sms_uses_native_schedule_and_no_immediate_transport(da
                 assert outbox.read(owner)==[] and repo.ready_tasks()==[]
                 saved=await client.call_tool('get_text_message',{'request_id':'future-text'})
                 assert saved.structured_content['ok'] and saved.structured_content['deliveries']==[]
+                rejected=await client.call_tool('send_text_message',{'request_id':'oversized-future',
+                    'phone':'+18435550100','recipient_name':'John','message':'“'*1100,'send_at':future()})
+                assert rejected.is_error
+                assert len(scheduler.native.saved)==1
                 cancelled=await client.call_tool('cancel_text_message',{'request_id':'future-text'})
                 assert cancelled.structured_content['schedule']['state']=='cancelled'

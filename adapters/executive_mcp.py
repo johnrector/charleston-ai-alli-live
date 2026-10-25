@@ -20,6 +20,7 @@ from alli_core.actions import ActionGate, Tool
 from alli_core.authority import Conflict, PermissionDenied
 from .errors import InvalidInput,ProviderRejected
 from .calendar import CalendarService
+from .sms import validate as validate_sms
 
 
 class TaskGrantVerifier:
@@ -176,6 +177,7 @@ def create_tool_server(repository, base_url, *, google=None,shopify=None,deliver
             key=action_key('text_person',arguments)
             _,task_id=principal()
             async def queue(actor,**values):
+                validate_sms(values['body'])
                 if values['at'] and scheduler is not None:
                     import json
                     instruction=('Send the exact literal SMS below to saved person ID '+person_id+

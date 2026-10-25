@@ -15,6 +15,7 @@ from pydantic_core import to_jsonable_python
 from alli_core.authority import PermissionDenied,Conflict
 from .google import email_address
 from .owner_oauth import SCOPE
+from .sms import validate as validate_sms
 
 
 def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=None):
@@ -170,6 +171,7 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
     @server.tool(structured_output=True,description='Send or schedule the exact owner-authorized text. Times need an explicit timezone. Saved is not delivered. Reuse the same request ID after an uncertain response.')
     async def send_text_message(request_id:str,phone:str,recipient_name:str,message:str,send_at:str|None=None) -> dict[str,Any]:
         owner=await actor()
+        validate_sms(message)
         person=await recipient(owner,phone,recipient_name)
         if send_at and scheduler is not None and not await saved_text(request_id):
             restricted=replace(owner,allowed_tools=('get_context','text_person','message_deliveries'))

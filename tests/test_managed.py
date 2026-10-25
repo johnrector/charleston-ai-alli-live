@@ -144,6 +144,20 @@ def test_api_billing_failure_is_specific_and_keeps_the_native_session(setup):
     assert store.sid=='native1' and sessions.create.await_count==0
 
 
+def test_native_report_retains_full_result_and_separate_authored_notification(setup):
+    runtime,store,sessions=setup
+    store.sid='native1'
+    sessions.retrieve.return_value.status='idle'
+    sessions.turns.list.return_value=NS(data=[NS(id='turn1',status='completed',error=None)])
+    full='A detailed report. “Actual findings.” '*40
+    sessions.items.list.return_value=NS(data=[NS(type='message',turn_id='turn1',role='assistant',
+        phase='final_answer',status='completed',output_text=json.dumps(dict(status='completed',
+        summary=full,notification='The report is ready.',remaining=[],notify=True)))])
+    asyncio.run(runtime.inspect('task1'))
+    assert store.outcomes[0][0][2]==full
+    assert store.outcomes[0][1]['notification']=='The report is ready.'
+
+
 def test_mac_access_is_checked_before_creating_an_agent(setup):
     from alli_core.execution import Execution
     runtime, store, sessions = setup

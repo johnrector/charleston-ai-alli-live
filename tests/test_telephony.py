@@ -49,6 +49,14 @@ def test_sms_receipt_uses_the_actual_sdk_message_resource():
     assert transport.client.messages.create.call_args.kwargs['body']=='Finished work'
 
 
+def test_sms_wire_rejection_happens_before_carrier_api():
+    from adapters.errors import InvalidInput
+    transport=carrier()
+    with pytest.raises(InvalidInput):
+        asyncio.run(transport.send('+18435550101','“'*1100,status_path='/phone/sms-status/test'))
+    transport.client.messages.create.assert_not_called()
+
+
 class Socket:
     def __init__(self):self.incoming=asyncio.Queue();self.sent=[];self.closed=False
     async def receive_json(self):return await self.incoming.get()

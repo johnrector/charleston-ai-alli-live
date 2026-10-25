@@ -46,7 +46,7 @@ class TaskStore(Protocol):
     def dispatch_uncertain(self, task_id: str) -> None: ...
     def record_outcome(self, task_id: str, status: str, text: str, *, turn_id: str,
                        remaining: tuple[str, ...] = (), notify: bool = True,
-                       provider_error: str | None = None): ...
+                       provider_error: str | None = None, notification: str = ''): ...
 
 
 class ManagedRuntime:
@@ -158,7 +158,7 @@ class ManagedRuntime:
             and item.phase == 'final_answer' and item.status == 'completed']
         text = finals[0].output_text if finals else ''
         status = turn.status
-        remaining, notify = (), True
+        remaining, notify, notification = (), True, ''
         code=getattr(getattr(turn,'error',None),'code',None)
         if status in {'failed','cancelled'} and not text:
             problems={
@@ -172,6 +172,7 @@ class ManagedRuntime:
                 report = Outcome.model_validate_json(text)
                 status, text = report.status, report.summary
                 remaining, notify = tuple(report.remaining), report.notify
+                notification = report.notification
                 if report.remaining and status == 'completed':
                     status = 'partial'
             except ValueError:
@@ -181,6 +182,6 @@ class ManagedRuntime:
         # assignment succeeded or notifying its recipient.
         reconciled = await asyncio.to_thread(self.store.record_outcome, task_id, status,
                                 text, turn_id=turn.id, remaining=remaining, notify=notify,
-                                provider_error=code)
+                                provider_error=code, notification=notification)
         return {'state': reconciled.state if reconciled else status,
                 'text': reconciled.summary if reconciled else text, 'turn_id': turn.id}

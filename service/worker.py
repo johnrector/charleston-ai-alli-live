@@ -12,6 +12,8 @@ from twilio.base.exceptions import TwilioRestException
 
 from alli_core.managed import Assignment,ToolConnection
 from alli_core.authority import friend_tools
+from adapters.sms import result_message
+from adapters.errors import InvalidInput
 
 
 log=logging.getLogger(__name__)
@@ -75,10 +77,8 @@ class Worker:
             return
         body=current['result'].strip()
         if not body:return
-        if len(body)>1500:
-            body=body[:1350].rstrip()+'…'
-            if current['scope']=='owner':
-                body+='\nFull activity: '+self.base_url+'/dashboard/work/'+task_id
+        owner_url=(self.base_url+'/dashboard/work/'+task_id) if current['scope']=='owner' else None
+        body=result_message(body,current['context'].get('notification'),owner_url=owner_url)
         await asyncio.to_thread(self.outbox.queue_result,task_id,body,current['turn_id'])
 
     async def provider_update(self,row):
@@ -104,6 +104,10 @@ class Worker:
         try:
             receipt=await self.carrier.send(row['destination'],row['body'],
                 status_path='/transport/sms-status/'+row['id'])
+        except InvalidInput:
+            # Includes legacy queued messages: no carrier request was made.
+            await asyncio.to_thread(self.outbox.receipt,row['id'],None,'failed',
+                {'ok':False,'not_attempted':True,'reason':'sms_wire_budget_exceeded'})
         except TwilioRestException as error:
             definitive=400<=error.status<500 and error.status!=429
             await asyncio.to_thread(self.outbox.receipt,row['id'],None,

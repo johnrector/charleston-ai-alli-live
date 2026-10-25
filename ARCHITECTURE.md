@@ -147,3 +147,22 @@ uncertain-write tests. Configuration and unit tests alone are not a release pass
 - https://developers.openai.com/api/docs/guides/agents-api/tools/plugins
 - https://developers.openai.com/plugins/build/mcp-events
 - https://learn.chatgpt.com/docs/dots/computers-and-apps
+
+## SMS delivery budget
+
+The executive agent supplies its complete structured result plus a separately
+authored notification of at most 160 characters. Short results are delivered
+intact. Longer owner results use the notification and the existing private
+dashboard URL; friends never receive owner dashboard links. Full results remain
+in the ledger. Older sessions without the new optional field still complete.
+
+The shared SMS adapter measures GSM 03.38 septets, including extension escapes,
+or UTF-16 code units, including surrogate pairs. A conservative application
+budget of eight concatenated segments is checked before saving immediate or
+native future literal messages and again before the carrier request. Literal
+messages are never silently rewritten, split into extra sends or truncated.
+Result notices are composed before enqueueing, keeping their existing durable
+source IDs and no-repeat semantics. OpenAI writes content; transport enforces
+wire limits. This adds no model pass, scheduler or conversation engine.
+
+Reference: https://www.twilio.com/docs/api/errors/30019

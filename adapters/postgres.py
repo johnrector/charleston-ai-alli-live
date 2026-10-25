@@ -551,7 +551,7 @@ class PostgresRepository:
                         {'call_id':call_id,'tool':operation['tool'],'read':not operation['writes'],
                          'receipt':audit},person_id=task['person_id'],task_id=task_id)
 
-    def record_outcome(self, task_id, status, text, *, turn_id, remaining=(), notify=True,provider_error=None):
+    def record_outcome(self, task_id, status, text, *, turn_id, remaining=(), notify=True,provider_error=None,notification=''):
         if status not in {'completed','partial','waiting','failed','cancelled'}:
             raise ValueError('Only a terminal turn can have an outcome')
         with self.connection() as db:
@@ -608,7 +608,8 @@ class PostgresRepository:
                 state = 'waiting'
             db.execute('''UPDATE ea_task SET state=%s,result=%s,updated_at=now(),context=context || %s,
                 completed_at=CASE WHEN %s THEN now() ELSE NULL END WHERE id=%s''',
-                (state, text, Jsonb({'remaining':list(remaining),'notify_requested':notify}),
+                (state, text, Jsonb({'remaining':list(remaining),'notify_requested':notify,
+                                   'notification':notification if state==status else ''}),
                  state not in {'waiting','working'}, task_id))
             db.execute('UPDATE ea_agent_run SET turn_id=%s,updated_at=now() WHERE task_id=%s', (turn_id, task_id))
             self._event(db, 'task:'+task_id+':turn:'+turn_id, 'task.'+state,

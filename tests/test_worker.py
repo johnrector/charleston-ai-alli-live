@@ -24,6 +24,22 @@ def worker_setup(database):
 
 
 @pytest.mark.asyncio
+async def test_long_unicode_report_preserves_full_result_and_sends_one_bounded_notice(worker_setup):
+    repo,owner,task,outbox,carrier,_,worker=worker_setup
+    full='A detailed research result. “Actual findings.” '*40
+    repo.record_outcome(task['id'],'completed',full,turn_id='long-report',
+                        notification='Your research is complete. The full findings are saved.')
+    await worker().tick()
+    await worker().tick()
+    await worker().tick()
+    assert carrier.send.await_count==1
+    body=carrier.send.call_args.args[1]
+    assert body=='Your research is complete. The full findings are saved.\nFull update: https://example.com/dashboard/work/'+task['id']
+    assert repo.task_result(task['id'])['result']==full
+    assert outbox.read(owner)[0]['body']==body
+
+
+@pytest.mark.asyncio
 async def test_completion_report_survives_process_loss_before_queue_and_send(worker_setup):
     repo,owner,task,outbox,carrier,_,worker=worker_setup
     repo.record_outcome(task['id'],'completed','The requested work is finished.',turn_id='turn1')

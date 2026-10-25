@@ -5,6 +5,7 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 
 from alli_core.authority import Conflict, PermissionDenied
+from .sms import validate as validate_sms
 
 
 def instant(value):
@@ -21,8 +22,7 @@ class DeliveryRepository:
         self.assistant_id=repository.profile.id
 
     def _enqueue(self,db,task,person_id,body,source_id,due,*,scheduled=False):
-        if not isinstance(body,str) or not 1<=len(body)<=1600:
-            raise ValueError('A text must contain between 1 and 1600 characters')
+        validate_sms(body)
         prior=db.execute('SELECT * FROM ea_delivery WHERE assistant_id=%s AND source_id=%s',
                          (self.assistant_id,source_id)).fetchone()
         if prior:

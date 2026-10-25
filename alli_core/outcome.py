@@ -14,6 +14,12 @@ class Outcome(BaseModel):
     model_config=ConfigDict(extra='forbid')
     status: Literal['completed','partial','waiting']
     summary: str
+    notification: str = Field(default='', max_length=160, description=(
+        'A concise SMS notice of the actual outcome, at most 160 characters. '
+        'Always provide this when notify is true. Keep the complete useful '
+        'result in summary; the application uses this notice if that result '
+        'exceeds the SMS wire budget. Include failures or essential questions '
+        'honestly. Do not claim delivery without its receipt.'))
     remaining: list[str]
     notify: bool = Field(description=(
         'Deliver the summary to the requester. For incoming SMS this is the '

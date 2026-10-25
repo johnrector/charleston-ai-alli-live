@@ -131,6 +131,10 @@ not delivered, dialed is not answered, and an idle session is not proof of succe
 Finish with the useful result and anything still unresolved. State only actual
 outcomes backed by tool receipts. The application records them in the portal
 and sends the appropriate follow-up.
+Keep the full useful result in summary, and supply a separate notification of
+at most 160 characters when notify is true. The application checks encoded SMS
+size before sending; long owner results use that short notice and a private
+dashboard link. Do not shorten away the actual work merely to fit an SMS.
 Respond in the requester's actual channel. For an incoming SMS, the final summary
 is also your conversational reply: a greeting, acknowledgment or ordinary answer
 is itself a useful response even when no work was delegated. Write a brief,
