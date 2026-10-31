@@ -54,7 +54,7 @@ class Oversight:
             self.repository._person(db,actor,owner=True)
             snapshot=db.execute('SELECT * FROM ea_calendar_coverage WHERE assistant_id=%s',(self.repository.profile.id,)).fetchone()
             if not snapshot:return None
-            intents=db.execute("""SELECT i.id,i.state,i.reason,i.due_at,i.schedule_id,p.state AS preparation_state,
+            intents=db.execute("""SELECT i.id,i.state,i.reason,i.due_at,i.schedule_id,i.catchup_authorized,p.state AS preparation_state,
                 t.state AS preparation_task_state,s.state AS schedule_state,s.provider_id,c.state AS call_state,
                 c.carrier_status,c.duration_seconds FROM ea_appointment_intent i LEFT JOIN ea_person_preparation p
                 ON p.id=i.preparation_id AND p.assistant_id=i.assistant_id LEFT JOIN ea_task t ON t.id=p.task_id
@@ -67,6 +67,7 @@ class Oversight:
             intent=by_id.get(event.get('appointment_id'))
             if intent:
                 state=intent['state'];reason=intent['reason']
+                if state=='scheduled' and intent['catchup_authorized']:reason='Daytime catch-up authorized and scheduled.'
                 if state=='scheduled' and (intent['schedule_state']!='active' or not intent['provider_id']):
                     state='execution pending' if intent['schedule_state']=='completed' else 'schedule missing'
                 if state=='planned':state='missing'

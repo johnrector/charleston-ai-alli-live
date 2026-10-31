@@ -330,6 +330,10 @@ class PeopleWorkflow:
         else:raise InvalidInput('Calendar planning window needs manual pagination review')
         outcomes=[];coverage=[]
         for event in events:
+            if event.get('status')!='cancelled' and event.get('organizer',{}).get('email','').casefold()!=self.google.owner_email.casefold():
+                await self.cancel_event(actor,event['id'])
+                coverage.append({'event_id':event['id'],'title':event.get('summary','Calendar event'),'start':event.get('start'),'state':'excluded','reason':'Not owner-organized; no policy-derived confirmation call expected'})
+                continue
             if event.get('status')=='cancelled':
                 await self.cancel_event(actor,event['id'])
                 coverage.append({'event_id':event['id'],'title':event.get('summary','Cancelled calendar event'),'start':event.get('start'),'state':'excluded','reason':'Calendar appointment cancelled'})

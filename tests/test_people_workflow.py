@@ -408,3 +408,17 @@ async def test_ready_preparation_receipt_remains_authority_when_worker_reports_p
     repo.record_outcome(prep['task_id'],'partial','Saved preparation; an earlier rejected lookup was recovered.',turn_id='partial',notify=False)
     assert Oversight(repo).coverage(owner)['events'][0]['state']=='scheduled'
     assert Oversight(repo).coverage(owner)['events'][0]['preparation_state']=='ready'
+
+
+@pytest.mark.asyncio
+async def test_coverage_distinguishes_authorized_catchup_and_other_organizers(setup):
+    repo,owner,person,task,flow,google,event=setup
+    await flow.configure(owner,task['id']);await flow.plan(owner,task['id'])
+    with repo.connection() as db:
+        db.execute("UPDATE ea_appointment_intent SET catchup_authorized=true,reason='Missed slot: explicit approval required'")
+    assert Oversight(repo).coverage(owner)['events'][0]['reason']=='Daytime catch-up authorized and scheduled.'
+    event['organizer']={'email':'other@example.com'}
+    event['attendees'][1]['email']='unknown@example.com'
+    await flow.plan(owner,task['id'])
+    item=Oversight(repo).coverage(owner)['events'][0]
+    assert item['state']=='excluded' and 'Not owner-organized' in item['reason']
