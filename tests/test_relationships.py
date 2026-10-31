@@ -110,3 +110,15 @@ def test_owner_notes_do_not_cross_assistant_boundaries(setup,database):
     with pytest.raises(PermissionDenied):
         Relationships(other).remember(other_owner,person,'Cross-assistant write',source_conversation_id=source)
     assert relationships.read(owner,person)['notes'][0]['id']==note['id']
+
+
+@pytest.mark.asyncio
+async def test_voice_relationship_context_excludes_the_current_call(setup):
+    repo,owner,person,source,relationships=setup
+    current=repo.begin_conversation('+18435550101','current-call','phone')['conversation']['id']
+    call={'person_id':person,'conversation_id':current,'person_status':'approved',
+          'number_verified':True,'scope':'friend','person_kind':'contact','direction':'inbound'}
+    brief=await relationships.voice_brief(call)
+    assert brief['available'] and brief['last_interaction']['channel']=='sms'
+    # The full owner view still reports the actual latest interaction.
+    assert relationships.read(owner,person)['last_interaction']['channel']=='phone'

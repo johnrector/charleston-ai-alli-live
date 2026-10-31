@@ -205,3 +205,16 @@ async def test_relationship_policy_and_diagnostic_views_escape_content_and_prese
             health=await http.get('/dashboard/health')
             assert 'needs review' in health.text and 'provider_failure' in health.text
             assert sdk.messages.create.call_count==0
+
+
+def test_cached_diagnostic_clearly_identifies_an_earlier_release():
+    from datetime import datetime,timezone
+    from service.dashboard_views import health,overview
+    now=datetime.now(timezone.utc)
+    summary={'work':[],'calls':[],'diagnostic':{'request_id':'daily-health:2026-10-31',
+        'release':'earlier-release','started_at':now,'finished_at':now,
+        'result':{'ok':True,'checks':{}}}}
+    page=health(summary,'current-release','America/New_York')
+    assert 'Checked release:' in page and 'earlier-release' in page and 'current-release' in page
+    assert 'It has not tested this release' in page
+    assert 'earlier application release' in overview(summary,[],[],'America/New_York','current-release')

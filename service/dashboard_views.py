@@ -48,7 +48,7 @@ def upcoming(schedules, commitments, zone):
     return content or '<div class="empty"><div class="empty-icon" aria-hidden="true">◷</div><h3>No future work saved.</h3><p>A calendar appointment alone does not create a confirmation call.</p></div>'
 
 
-def overview(summary, schedules, commitments, zone):
+def overview(summary, schedules, commitments, zone, release=''):
     active=[s for s in schedules if s['state'] in {'active','creating'}]
     queued=[c for c in summary['calls'] if c['direction']=='outbound' and c['state'] in {'queued','attempting','accepted','uncertain'}]
     content=title('A little clarity for your day.','Upcoming commitments, work to review, and the records behind every outcome.',zone)
@@ -64,6 +64,8 @@ def overview(summary, schedules, commitments, zone):
         result=diagnostic['result']
         state='AI checks passed' if result and result.get('ok') else 'Review saved result' if result else 'Unconfirmed attempt'
         content+='<h3>'+e(state)+'</h3><p class="small">'+e(when(diagnostic['started_at'],zone))+'</p><p class="small">AI dependency checks. This does not prove carrier delivery or future availability.</p>'
+        if release and diagnostic['release'] and release!=diagnostic['release']:
+            content+='<p class="small">This saved check belongs to an earlier application release.</p>'
     else:content+='<h3>No saved check yet.</h3><p class="small">Opening this page does not run a paid probe or contact anyone.</p>'
     return content+'</section></aside></div>'
 
@@ -88,7 +90,9 @@ def health(summary, release, zone):
     if row:
         result=row['result']
         content+=badge('completed' if result and result.get('ok') else 'needs review' if result else 'unconfirmed')+'</div>'
-        content+='<p class="small">Attempt started '+e(when(row['started_at'],zone))+'</p>'
+        content+='<p class="small">Attempt started '+e(when(row['started_at'],zone))+'</p><p class="source">Checked release: <code>'+e(row['release'])+'</code></p>'
+        if release and row['release'] and release!=row['release']:
+            content+='<p class="callout amber">This saved check is from an earlier application release. It has not tested this release.</p>'
         if result:
             for name,check in result.get('checks',{}).items():
                 content+='<div class="health-item"><div class="health-item-head"><h3>'+e({'voice':'GPT-Live connection','text':'Text response','agents':'Existing Agents session access'}.get(name,name))+'</h3>'+badge('passed' if check.get('ok') else 'needs review')+'</div>'+evidence('Read check evidence',check)+'</div>'

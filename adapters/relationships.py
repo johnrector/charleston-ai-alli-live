@@ -82,7 +82,7 @@ class Relationships:
                 raise PermissionDenied('Unknown person')
             return self._read(db, person_id, private=True)
 
-    def _read(self, db, person_id, *, private):
+    def _read(self, db, person_id, *, private, exclude_conversation_id=None):
         assistant = self.repository.profile.id
         notes = db.execute('''SELECT n.id,n.body,n.source_task_id,n.source_conversation_id,n.created_at,n.supersedes_id,
             coalesce(v.started_at,t.created_at) AS evidence_at FROM ea_relationship_note n
@@ -91,8 +91,9 @@ class Relationships:
             WHERE n.assistant_id=%s AND n.person_id=%s AND n.superseded_by IS NULL
             ORDER BY n.created_at DESC,n.id LIMIT 6''', (assistant,person_id)).fetchall() if private else []
         recent = db.execute('''SELECT channel,started_at FROM ea_conversation WHERE assistant_id=%s
-            AND person_id=%s AND (%s OR scope='friend') ORDER BY started_at DESC LIMIT 1''',
-            (assistant,person_id,private)).fetchone()
+            AND person_id=%s AND (%s OR scope='friend')
+            AND (%s::uuid IS NULL OR id<>%s::uuid) ORDER BY started_at DESC LIMIT 1''',
+            (assistant,person_id,private,exclude_conversation_id,exclude_conversation_id)).fetchone()
         commitments = db.execute('''SELECT id,kind,due_at,state FROM ea_commitment WHERE assistant_id=%s
             AND person_id=%s AND state IN ('planned','queued','blocked')
             ORDER BY due_at,id LIMIT 5''', (assistant,person_id)).fetchall() if private else []
@@ -107,7 +108,8 @@ class Relationships:
         private = call.get('scope') == 'owner' and call.get('person_kind') == 'owner'
         with self.repository.connection() as db:
             db.execute("SET LOCAL statement_timeout='50ms'")
-            data = self._read(db, call['person_id'], private=private)
+            data = self._read(db, call['person_id'], private=private,
+                              exclude_conversation_id=call.get('conversation_id'))
         # No raw transcripts, prompts, phone numbers, private notes about other
         # people or full task results enter the real-time conversation.
         recent=data['last_interaction']

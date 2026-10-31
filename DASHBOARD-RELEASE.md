@@ -28,7 +28,7 @@ The full regression run exposed a pre-existing concurrent daily-diagnostic claim
 ## Verification
 
 - Baseline: 190 tests passed with a disposable local Postgres cluster.
-- Release: **202 tests passed** in the full regression suite, including real Postgres/MCP HTTP, permissions, source validation, correction/idempotency, restart-safe migration, HTML escaping, cached health reads and visibility after 210 historical schedules.
+- Release: **204 tests passed** in the full regression suite, including real Postgres/MCP HTTP, permissions, source validation, correction/idempotency, restart-safe migration, HTML escaping, cached health reads and visibility after 210 historical schedules.
 - Local visual review uses actual rendered routes with fictional records only. Desktop and 390 px phone layouts were checked; tested phone pages had no horizontal overflow. The loopback preview is separate from the application checkout.
 - No production API calls, records, credentials, permission changes or deployment were performed by this implementation.
 
@@ -41,3 +41,5 @@ The full regression run exposed a pre-existing concurrent daily-diagnostic claim
 ## Release boundary
 
 Code and offline validation only. Do not push this branch to auto-deploying main without the parent's explicit deployment authorization. Following deployment, verify the release identity, existing owner login, the real schedule listing, cached health result and one separately authorized voice smoke test. Do not create appointment calls as a smoke test.
+
+Independent review found no high-priority blockers. Its two nonblocking findings were corrected: the voice projection now excludes the current conversation when retrieving previous interaction context, and cached diagnostics visibly identify their recorded release, including an earlier-release notice. Targeted follow-up and the full 204-test regression suite passed.

@@ -115,7 +115,7 @@ def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=Non
             asyncio.to_thread(oversight.summary,actor),
             asyncio.to_thread(scheduler.list,actor) if scheduler else asyncio.sleep(0,result=[]),
             asyncio.to_thread(repository.owner_commitments,actor))
-        return page('Today',views.overview(summary,schedules,commitments,zone))
+        return page('Today',views.overview(summary,schedules,commitments,zone,settings.release))
 
     @router.get('/dashboard/activity')
     async def activity(request: Request):
