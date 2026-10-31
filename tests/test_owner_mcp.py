@@ -98,3 +98,36 @@ async def test_owner_diagnostic_tool_exports_schema_and_never_dispatches_work(da
                 assert again.structured_content['reused'] and len(probes)==3
         assert repo.ready_tasks()==[]
         carrier.send.assert_not_awaited();carrier.dial.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owner_read_lookup_finds_native_and_legacy_calls_without_dialing(database):
+    settings=Settings('https://testserver','+18435550100','+18435550999','AC-test',database,
+        'test-carrier-secret','test-session-secret',Fernet.generate_key().decode(),background=False)
+    repo=PostgresRepository(database,Profile.load('profiles/alli.toml'))
+    api=NS(close=AsyncMock());api.with_options=lambda **kwargs:api
+    carrier=NS(send=AsyncMock(),dial=AsyncMock())
+    app=create_application(settings,repo,carrier,None,api)
+    async with app.router.lifespan_context(app):
+        owner=repo.owner_actor('test-owner')
+        task=repo.submit(owner,source_id='native-invocation:test',title='Native call',instruction='Confirm the saved appointment')
+        call=app.state.calls.queue(task['id'],owner.person_id,'One saved call','native-source-test')
+        app.state.calls.claim()
+        app.state.calls.bind(call['id'],'CA-native-test',to='+18435550100',from_='+18435550999',status='completed',duration=20)
+        repo.save_transcript(str(call['conversation_id']),[{'role':'user','text':'Your message has been sent.'}],finalized=True)
+        app.state.calls.error(call['id'],'context_injection_incomplete')
+        token=(await app.state.oauth.issue('lookup-test')).access_token
+        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app),headers={'Authorization':'Bearer '+token}) as http:
+            async with Client(streamable_http_client('https://testserver/mcp',http_client=http),mode='2026-07-28') as client:
+                for reference in [call['id'],'CA-native-test','native-source-test',str(call['conversation_id'])]:
+                    result=(await client.call_tool('get_call_result',{'request_id':reference})).structured_content
+                    assert result['ok'] and result['call_id']==call['id']
+                    assert result['transcript_finalized'] and result['transcript'][0]['text']=='Your message has been sent.'
+                    assert result['live_errors'][0]['facts']['code']=='context_injection_incomplete'
+                    assert not result['confirmed_by_carrier_status']
+                assert (await client.call_tool('get_call_result',{'request_id':'not-a-call'})).structured_content['status']=='not_found'
+                other=repo.submit(owner,source_id='legacy-report',title='Legacy',instruction='Report legacy')
+                legacy=app.state.calls.queue(other['id'],owner.person_id,'Legacy mission','dot-call:legacy-request')
+                result=(await client.call_tool('get_call_result',{'request_id':'legacy-request'})).structured_content
+                assert result['call_id']==legacy['id']
+        carrier.dial.assert_not_awaited();carrier.send.assert_not_awaited()

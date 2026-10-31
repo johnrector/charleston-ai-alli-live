@@ -137,14 +137,16 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
             ensure_ascii=False,separators=(',',':')).encode()).hexdigest()
         return await call_outbound(request_id,phone,recipient_name,mission,email)
 
-    @server.tool(structured_output=True,description='Read an existing call without dialing. Carrier answered/completed status is not independent proof of human conversation or meeting confirmation.')
+    @server.tool(structured_output=True,description='Read an existing call without dialing. request_id accepts the original Dot request ID, saved call ID, conversation ID, exact source ID or carrier SID, including native scheduled calls. Carrier answered/completed status is not proof of human conversation or meeting confirmation.')
     async def get_call_result(request_id:str) -> dict[str,Any]:
         await actor()
-        call=await asyncio.to_thread(calls.by_request,'dot-call:'+request_id)
+        call=await asyncio.to_thread(calls.lookup,request_id)
         if not call:return {'ok':False,'status':'not_found','request_id':request_id}
         task=await asyncio.to_thread(repository.task_result,call['parent_task_id'])
         return to_jsonable_python({'ok':True,'request_id':request_id,'status':call['state'],
             'provider_status':call['carrier_status'],'provider_call_sid':call['provider_id'],
+            'call_id':call['id'],'source_id':call['source_id'],'conversation_id':str(call['conversation_id']),
+            'parent_task_id':call['parent_task_id'],'live_errors':await asyncio.to_thread(calls.errors,call['id']),
             'duration_seconds':call['duration_seconds'],'transcript':call['transcript'],
             'transcript_finalized':call['finalized'],'conversation_report':task['result'] if task else '',
             'confirmed_by_carrier_status':False})

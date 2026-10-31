@@ -133,6 +133,26 @@ class CallRepository:
                            (self.assistant_id,source_id)).fetchone()
         return self.get(row['id']) if row else None
 
+    def lookup(self,reference):
+        """Owner bridge read lookup across all call origins; never creates work."""
+        from uuid import UUID
+        if not isinstance(reference,str) or not 1<=len(reference)<=512:
+            raise ValueError('Supply a saved request, call, conversation, source or provider ID')
+        try:conversation=str(UUID(reference))
+        except ValueError:conversation=None
+        with self.repository.connection() as db:
+            rows=db.execute("""SELECT id FROM ea_phone_call WHERE assistant_id=%s AND
+                (id=%s OR provider_id=%s OR source_id IN (%s,%s) OR conversation_id=%s::uuid) LIMIT 2""",
+                (self.assistant_id,reference,reference,reference,'dot-call:'+reference,conversation)).fetchall()
+        if len(rows)>1:raise Conflict('Call reference is ambiguous; use the exact saved call ID')
+        return self.get(rows[0]['id']) if rows else None
+
+    def errors(self,identifier):
+        with self.repository.connection() as db:
+            return db.execute("""SELECT created_at,facts FROM ea_activity WHERE assistant_id=%s
+                AND kind='call.error' AND facts->>'call_id'=%s ORDER BY created_at,id""",
+                (self.assistant_id,identifier)).fetchall()
+
     def current_for_task(self,task_id):
         with self.repository.connection() as db:
             task=self.repository._task(db,task_id)
