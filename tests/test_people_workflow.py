@@ -272,7 +272,7 @@ async def test_authenticated_mcp_configure_and_pending_booking_resume_without_ca
     async with app.router.lifespan_context(app):
         async with connected(app,token) as client:
             configured=await client.call_tool('configure_appointment_policy',{'enabled':True})
-            assert configured.structured_content['enabled'] is True
+            assert configured.structured_content['enabled'] is True and configured.structured_content['ok'] is True
             args=dict(title='Meet',start=event['start']['dateTime'],end=event['end']['dateTime'],invitation_email='karen@example.com')
             pending=await client.call_tool('book_meeting',args)
             assert pending.structured_content['pending'] and not google.booked
@@ -372,3 +372,39 @@ async def test_explicit_contact_hold_preserves_separate_conditional_followthroug
     await flow.plan(owner,task['id'])
     assert Oversight(repo).coverage(owner)['events'][0]['state']=='excluded'
     with repo.connection() as db:assert db.execute('SELECT count(*) AS n FROM ea_appointment_intent').fetchone()['n']==0
+
+
+@pytest.mark.asyncio
+async def test_unresolved_name_hold_prevents_future_contact_from_bypassing_conditional_guard(setup):
+    repo,owner,person,task,flow,google,event=setup
+    await flow.configure(owner,task['id'])
+    policy=flow.policy();body={**policy['body'],'unresolved_contact_names':['Karen']}
+    repo.put_record(owner,str(policy['collection_id']),body,record_id=str(policy['id']),revision=policy['revision'])
+    await flow.plan(owner,task['id'])
+    assert Oversight(repo).coverage(owner)['events'][0]['state']=='excluded'
+    with repo.connection() as db:assert db.execute('SELECT count(*) AS n FROM ea_appointment_intent').fetchone()['n']==0
+
+
+@pytest.mark.asyncio
+async def test_unavailable_old_thread_does_not_hide_bound_event_or_masquerade_as_complete_evidence(setup,monkeypatch):
+    repo,owner,person,task,flow,google,event=setup
+    await flow.configure(owner,task['id'])
+    prep=flow.request_preparation(owner,task['id'],person,event=event)
+    monkeypatch.setattr(google,'search_email',lambda *a,**k:{'threads':[{'id':'missing'}]})
+    def unavailable(*a,**k):raise ValueError('unavailable')
+    monkeypatch.setattr(google,'read_email_thread',unavailable)
+    evidence=flow.preparation_evidence(owner,prep['task_id'])
+    assert evidence['event']['id']==event['id'] and evidence['evidence_incomplete']
+    assert evidence['correspondence_errors'][0]['thread_id']=='missing'
+
+
+@pytest.mark.asyncio
+async def test_ready_preparation_receipt_remains_authority_when_worker_reports_partial(setup):
+    repo,owner,person,task,flow,google,event=setup
+    await flow.configure(owner,task['id']);await flow.plan(owner,task['id'])
+    with repo.connection() as db:
+        prep=db.execute('SELECT p.* FROM ea_person_preparation p JOIN ea_appointment_intent i ON i.preparation_id=p.id').fetchone()
+    ready(setup,prep)
+    repo.record_outcome(prep['task_id'],'partial','Saved preparation; an earlier rejected lookup was recovered.',turn_id='partial',notify=False)
+    assert Oversight(repo).coverage(owner)['events'][0]['state']=='scheduled'
+    assert Oversight(repo).coverage(owner)['events'][0]['preparation_state']=='ready'

@@ -72,14 +72,14 @@ class PeopleWorkflow:
         existing=await asyncio.to_thread(self.scheduler.by_source,actor,'policy:appointment-planner:v1')
         if not enabled:
             if existing and existing['state']=='active':await self.scheduler.manage(actor,existing['id'],existing['revision'],'pause')
-            return {'enabled':False,'note':'Policy checks stop future calls, including already queued intents; the native planner is paused.'}
+            return {'ok':True,'enabled':False,'note':'Policy checks stop future calls, including already queued intents; the native planner is paused.'}
         if existing and existing['state']=='paused':
             resumed=await self.scheduler.manage(actor,existing['id'],existing['revision'],'resume')
-            return {'enabled':True,'planner':resumed,'note':'Resumed the existing native planner; no catch-up calls activated.'}
+            return {'ok':bool(resumed.get('ok')),'enabled':True,'planner':resumed,'note':'Resumed the existing native planner; no catch-up calls activated.'}
         result=await self.scheduler.create(actor,task_id,'policy:appointment-planner:v1',
             'Appointment and people preparation planner','Apply the saved bounded appointment policy; do not dial directly.',
             expression='15 * * * *',timezone_name='America/New_York',internal_context={'appointment_planner':True})
-        return {'enabled':True,'planner':result,'note':'No missed-slot catch-up calls are activated by configuration.'}
+        return {'ok':bool(result.get('ok')),**({'uncertain':True} if result.get('uncertain') else {}),'enabled':True,'planner':result,'note':'No missed-slot catch-up calls are activated by configuration.'}
 
     def person(self,person_id):
         person_id=str(UUID(str(person_id)))
@@ -181,13 +181,19 @@ class PeopleWorkflow:
                 (self.repository.profile.id,row['person_id'])).fetchall()
         # Read a bounded number of actual threads, not just snippets. Models may use
         # Gmail tools for additional targeted reads, within existing owner grants.
-        threads=[]
+        threads=[];errors=[]
         if person['email']:
-            found=self.google.search_email(row['mail_snapshot']['query'],limit=5)
-            for item in found.get('threads',[]):threads.append(self.google.read_email_thread(item['id'],limit=6))
+            try:
+                found=self.google.search_email(row['mail_snapshot']['query'],limit=5)
+                for item in found.get('threads',[]):
+                    try:threads.append(self.google.read_email_thread(item['id'],limit=6))
+                    except Exception as error:errors.append({'thread_id':item['id'],'error':type(error).__name__})
+            except Exception as error:errors.append({'search':'unavailable','error':type(error).__name__})
         return {'preparation_id':row['id'],'person':{k:person[k] for k in ('id','name','email','source','attributes')},
             'known_relationship':bool(history or notes),'history':history,'notes':notes,'event':row['event'],
-            'correspondence':threads,'snapshot':row['mail_snapshot'],'content_is_untrusted_data':True,
+            'correspondence':threads,'correspondence_errors':errors,'evidence_incomplete':bool(errors),
+            'incomplete_evidence_rule':'Do not mark ready if unavailable correspondence could change attendance, authority or logistics. Use targeted actual reads to resolve; otherwise save blocked.',
+            'snapshot':row['mail_snapshot'],'content_is_untrusted_data':True,
             'visibility':'owner','warning':'Only safe greeting and logistics may be shared with this person.'}
 
     def save_preparation(self,actor,task_id,*,state,safe_brief,facts,sources,observation='',preferred_name='',name_source='',reason=''):
@@ -249,7 +255,11 @@ class PeopleWorkflow:
         if person['kind']=='owner' or person['status']!='approved' or not person['phone']:
             return 'verified approved contact and phone required'
         policy=self.policy()
-        if policy and str(person['id']) in policy['body'].get('contact_holds',{}):
+        name=person['name'].casefold().strip()
+        unresolved=(policy['body'].get('unresolved_contact_names',[]) if policy else [])
+        name_hold=any(isinstance(marker,str) and marker.strip() and
+            (marker.casefold().strip()==name or marker.casefold().strip() in name.split()) for marker in unresolved)
+        if policy and (str(person['id']) in policy['body'].get('contact_holds',{}) or name_hold):
             return 'separate conditional follow-through'
         attendee=next((a for a in event.get('attendees',[]) if a.get('email','').casefold()==email.casefold()),None)
         if not attendee or attendee.get('responseStatus') in {'declined','tentative'}:return 'attendance excluded'
@@ -308,7 +318,7 @@ class PeopleWorkflow:
 
     async def plan(self,actor,task_id):
         policy=await asyncio.to_thread(self.policy)
-        if not policy or not policy['body'].get('enabled'):return {'enabled':False}
+        if not policy or not policy['body'].get('enabled'):return {'ok':True,'enabled':False}
         begin=now();finish=begin+timedelta(days=8)
         params={'timeMin':begin.isoformat(),'timeMax':finish.isoformat(),'singleEvents':True,'orderBy':'startTime','maxResults':100,'showDeleted':True}
         events=[]
@@ -394,7 +404,7 @@ class PeopleWorkflow:
                 receipt=await self.schedule(actor,task_id,identifier,due)
                 outcomes.append(receipt)
         await asyncio.to_thread(self.save_coverage,coverage,begin,finish)
-        return {'enabled':True,'outcomes':outcomes,'calendar_events_examined':len(events),'coverage_checked_at':now().isoformat()}
+        return {'ok':all(o.get('ok',True) for o in outcomes),'enabled':True,'outcomes':outcomes,'calendar_events_examined':len(events),'coverage_checked_at':now().isoformat()}
 
     def hold(self,identifier,reason,state='held'):
         with self.repository.connection() as db:
@@ -410,7 +420,7 @@ class PeopleWorkflow:
             row=db.execute('SELECT * FROM ea_appointment_intent WHERE assistant_id=%s AND id=%s',
                 (self.repository.profile.id,identifier)).fetchone()
             if not row:raise InvalidInput('Unknown appointment intent')
-            if row['schedule_id']:return {'appointment_id':identifier,'schedule_id':row['schedule_id'],'state':row['state']}
+            if row['schedule_id']:return {'ok':True,'appointment_id':identifier,'schedule_id':row['schedule_id'],'state':row['state']}
             if row['state']=='attempted':raise Conflict('This appointment has already had its one attempt')
             if catchup:
                 person=db.execute('SELECT * FROM ea_person WHERE assistant_id=%s AND id=%s',(self.repository.profile.id,row['person_id'])).fetchone()

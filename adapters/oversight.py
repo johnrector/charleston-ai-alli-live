@@ -70,7 +70,7 @@ class Oversight:
                 if state=='scheduled' and (intent['schedule_state']!='active' or not intent['provider_id']):
                     state='execution pending' if intent['schedule_state']=='completed' else 'schedule missing'
                 if state=='planned':state='missing'
-                if intent['preparation_state']=='blocked' or intent['preparation_task_state'] in {'failed','partial','cancelled'}:
+                if intent['preparation_state']=='blocked' or (intent['preparation_state']!='ready' and intent['preparation_task_state'] in {'failed','partial','cancelled'}):
                     state='blocked';reason=reason or 'People preparation did not complete'
                 events.append({**event,**intent,'state':state,'reason':reason})
             else:events.append(event)

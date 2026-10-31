@@ -66,9 +66,13 @@ service build failure is not an active-service outage.
 
 The workflow release has explicit user deployment/configuration authorization.
 Independent read-only review found no remaining confirmed deployment blocker.
-The final regression run passed 227 tests before the source-derived mission and
-coverage layout finishing edits; the final workflow/application/worker checks also passed 40 tests after those
-finishing edits. Tests use disposable local Postgres, authenticated MCP HTTP and fake
+The final guarded release passed **231 tests** in the full regression suite.
+Unresolved conditional contacts can be excluded conservatively by name until a
+saved identity is resolved; this exclusion never merges identities or authorizes
+dialing. A ready preparation save receipt remains authoritative when its worker
+reports partial after a recovered lookup/validation error. Missing older Gmail
+threads retain the event evidence with an explicit incomplete-evidence flag.
+Configuration and planning receipts explicitly distinguish success/uncertainty. Tests use disposable local Postgres, authenticated MCP HTTP and fake
 Google/native/carrier providers. They cover DST, restart/single-connection pooling,
 permission isolation, nickname sources, pending booking/call continuation,
 waiter replay, manual deduplication, source revisions, cancellations and fresh
