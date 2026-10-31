@@ -44,7 +44,7 @@ class DiagnosticStore:
             if day != today:
                 raise ValueError('A new diagnostic must use today in the assistant timezone')
             row = db.execute('''INSERT INTO ea_diagnostic_run(assistant_id,check_date,request_id,release)
-                VALUES(%s,%s,%s,%s) ON CONFLICT(assistant_id,check_date) DO NOTHING RETURNING *''',
+                VALUES(%s,%s,%s,%s) ON CONFLICT DO NOTHING RETURNING *''',
                 (self.repository.profile.id, day, request_id, release)).fetchone()
             if row:
                 return row, True
