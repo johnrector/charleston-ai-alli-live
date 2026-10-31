@@ -277,3 +277,19 @@ async def test_optional_voicemail_start_never_holds_live_audio_and_suppressed_te
     control.close.assert_awaited_once()
     blocked.set();await asyncio.gather(*background)
     assert 'application owns the finite voicemail' in connection.configuration['input'][0]['content'][0]['text']
+
+
+@pytest.mark.asyncio
+async def test_media_summary_distinguishes_forwarded_audio_from_absent_transcript_after_close():
+    from unittest.mock import AsyncMock
+    live,connection,channel,hooks,background,instructions=create(lambda *args:None)
+    hooks.media_evidence=AsyncMock()
+    run=asyncio.create_task(live.run(instructions=instructions,context={}))
+    await asyncio.wait_for(live.started.wait(),1)
+    await channel.incoming.put('input-audio')
+    await connection.events.put(NS(type='session.output_audio.delta',delta='output-audio'))
+    await asyncio.wait_for(channel.playing.wait(),1)
+    await channel.incoming.put(None);await asyncio.wait_for(run,1)
+    evidence=hooks.media_evidence.call_args.args[0]
+    assert evidence['live']=={'input_packets_forwarded':1,'output_audio_events_received':1,'transcript_events_received':0}
+    hooks.media_evidence.assert_awaited_once()

@@ -163,7 +163,8 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
             'parent_task_id':call['parent_task_id'],'live_errors':await asyncio.to_thread(calls.errors,call['id']),
             'context_updates':await asyncio.to_thread(calls.context_updates,call['id']),
             'voicemail_evidence':await asyncio.to_thread(calls.voicemail_evidence,call['id']),
-            'duration_seconds':call['duration_seconds'],'transcript':call['transcript'],
+            'media_evidence':await asyncio.to_thread(calls.media_evidence,call['id']),
+            'duration_seconds':call['duration_seconds'],'ended_at':call['ended_at'],'native_finalized':call['native_finalized'],'transcript':call['transcript'],
             'transcript_finalized':call['finalized'],'conversation_report':task['result'] if task else '',
             'confirmed_by_carrier_status':False})
 

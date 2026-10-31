@@ -57,6 +57,9 @@ async def test_finite_audio_waits_for_exact_played_mark_and_clear_invalidates_ol
     assert not second.done()
     await socket.incoming.put({'event':'mark','streamSid':'MZ-test','mark':{'name':new}})
     assert await second is True
+    evidence=channel.evidence()
+    assert evidence['last_finite_playback']['mark_name']==new and evidence['last_finite_playback']['played']
+    assert evidence['marks_acknowledged']==1 and evidence['marks_invalidated']==1
     assert b''.join(base64.b64decode(e['media']['payload']) for e in socket.sent if e['event']=='media')==b'\xff'*24000
     await socket.incoming.put({'event':'stop'});await reader;await channel.close()
 
@@ -117,17 +120,16 @@ async def ready(setup,*,bind=True):
     return calls.get(call['id'])
 
 
-async def control(setup,*,detection='machine_end_beep',destination='voicemail',started=False):
+async def control(setup,*,detection='machine_end_beep',live_spoken=False):
     repo,task,calls,_,manager=setup
     call=await ready(setup)
-    manager.classify=AsyncMock(return_value={'destination':destination,'message_already_started':started,'reason':'source evidence'})
     await manager.detected(call['id'],{'CallSid':'CA-test','AnsweredBy':detection})
     channel=Channel()
     jobs=[]
     def spawn(coro):
         job=asyncio.create_task(coro);jobs.append(job);return job
     value=manager.attach(call,channel,spawn)
-    value.transcript_event('user','Please leave a message at the tone.')
+    if live_spoken:value.live_output()
     await value.start()
     if value.job:await value.job
     return value,channel,jobs
@@ -149,13 +151,11 @@ async def test_one_finite_message_then_one_hangup_with_separate_durable_receipt(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('detection,destination,started',[
-    ('human','human',False),('unknown','voicemail',False),('fax','voicemail',False),
-    ('machine_end_beep','human',False),('machine_end_beep','unknown',False),('machine_end_beep','voicemail',True)])
-async def test_human_unknown_ivr_or_already_spoken_message_never_gets_clip_or_hangup(setup,detection,destination,started):
-    value,channel,_=await control(setup,detection=detection,destination=destination,started=started)
+@pytest.mark.parametrize('detection,live_spoken',[
+    ('human',False),('unknown',False),('fax',False),('machine_end_beep',True)])
+async def test_human_unknown_fax_or_earlier_live_audio_never_gets_clip_or_auto_hangup(setup,detection,live_spoken):
+    value,channel,_=await control(setup,detection=detection,live_spoken=live_spoken)
     channel.play_finite.assert_not_awaited();setup[-1].carrier.end.assert_not_awaited()
-    if detection in {'human','unknown','fax'}:setup[-1].classify.assert_not_awaited()
     assert not value.suppress_live
     await value.close()
 
@@ -165,11 +165,10 @@ async def test_missing_playback_ack_never_hangs_up_and_never_replays(setup):
     manager=setup[-1]
     # Set up explicitly so the transport result is false rather than successful.
     call=await ready(setup)
-    manager.classify=AsyncMock(return_value={'destination':'voicemail','message_already_started':False,'reason':'machine'})
     channel=Channel();channel.play_finite.return_value=False
     value=manager.attach(call,channel,asyncio.create_task)
     await value.start();value.transcript=[{'role':'user','text':'record a message'}];value.detector='machine_end_beep'
-    await value.decide_and_play()
+    await value.play_and_end()
     assert value.state=='playback_unconfirmed'
     manager.carrier.end.assert_not_awaited()
     value.transcript_event('user','menu')
@@ -181,7 +180,6 @@ async def test_missing_playback_ack_never_hangs_up_and_never_replays(setup):
 @pytest.mark.parametrize('phase',['during_audio','after_ack','during_claim'])
 async def test_interruptions_prevent_hangup_even_during_persistence_windows(setup,phase):
     manager=setup[-1];call=await ready(setup)
-    manager.classify=AsyncMock(return_value={'destination':'voicemail','message_already_started':False,'reason':'machine'})
     channel=Channel();value=manager.attach(call,channel,asyncio.create_task)
     await value.start();value.detector='machine_end_beep';value.transcript=[{'role':'user','text':'record a message'}]
     if phase=='during_audio':
@@ -196,7 +194,7 @@ async def test_interruptions_prevent_hangup_even_during_persistence_windows(setu
             return result
         if phase=='after_ack':manager.state=persistence
         else:manager.claim_hangup=persistence
-    await value.decide_and_play()
+    await value.play_and_end()
     manager.carrier.end.assert_not_awaited()
     await value.close()
 
@@ -255,30 +253,35 @@ async def test_interrupt_while_waiting_for_output_lock_sends_no_voicemail_bytes(
 
 
 @pytest.mark.asyncio
-async def test_live_output_during_classification_blocks_duplicate_reminder(setup):
+async def test_live_output_during_asset_fetch_blocks_duplicate_reminder(setup):
+    from threading import Event
     manager=setup[-1];call=await ready(setup)
-    waiting=asyncio.Event();release=asyncio.Event()
-    async def classify(snapshot):
-        waiting.set();await release.wait()
-        return {'destination':'voicemail','message_already_started':False,'reason':'old snapshot'}
-    manager.classify=classify
+    waiting=Event();release=Event()
     channel=Channel();value=manager.attach(call,channel,asyncio.create_task)
-    await value.start();value.detector='machine_end_beep';value.transcript=[{'role':'user','text':'record a message'}]
-    job=asyncio.create_task(value.decide_and_play());await waiting.wait()
-    value.live_output();value.transcript_event('assistant','Here is your full reminder.')
-    release.set();await job
-    if value.job:await value.job
+    await value.start();value.detector='machine_end_beep'
+    original=manager.row
+    def row(*args,**kwargs):
+        if kwargs.get('audio'):
+            waiting.set();assert release.wait(2)
+        return original(*args,**kwargs)
+    manager.row=row
+    job=asyncio.create_task(value.play_and_end())
+    assert await asyncio.to_thread(waiting.wait,2)
+    value.live_output();release.set();await job
     channel.play_finite.assert_not_awaited();manager.carrier.end.assert_not_awaited()
-    assert value.state=='held'
+    assert not value.suppress_live
     await value.close()
 
 
 @pytest.mark.asyncio
-async def test_false_machine_unknown_preserves_normal_end_and_does_not_rearm(setup):
-    value,channel,_=await control(setup,destination='unknown')
-    assert value.state=='held' and setup[-1].allow_delegated_end(value.call['id'])
+async def test_unknown_detection_preserves_normal_end_and_never_rearms_after_end_reservation(setup):
+    value,channel,_=await control(setup,detection='unknown')
+    assert setup[-1].allow_delegated_end(value.call['id'])
+    assert await setup[-1].reserve_delegated_end(value.call['id'])
+    value.notify_detection('machine_end_beep')
     value.transcript_event('user','Yes, this is Test, I can hear you.')
-    channel.play_finite.assert_not_awaited();assert setup[-1].classify.await_count==1
+    channel.play_finite.assert_not_awaited()
+    assert value.cancelled
     await value.close()
 
 
@@ -295,33 +298,38 @@ async def test_no_message_policy_hangs_up_without_claiming_audio_played(setup):
 
 
 @pytest.mark.asyncio
-async def test_classifier_failure_leaves_live_and_normal_hangup_available_without_retry(setup):
-    manager=setup[-1];call=await ready(setup)
-    manager.classify=AsyncMock(side_effect=TimeoutError('unavailable'))
-    value=manager.attach(call,Channel(),asyncio.create_task)
-    await value.start();value.detector='machine_end_beep';value.transcript=[{'role':'user','text':'record a message'}]
-    await value.decide_and_play()
-    assert value.state=='held' and manager.allow_delegated_end(call['id'])
-    manager.carrier.end.assert_not_awaited();await value.close()
+@pytest.mark.parametrize('detection',['machine_end_beep','machine_end_silence','machine_end_other'])
+async def test_signed_ready_without_any_transcript_or_second_model_plays_once_and_ends(setup,detection):
+    value,channel,_=await control(setup,detection=detection)
+    assert value.transcript==[] and value.state=='hangup_accepted'
+    assert not hasattr(setup[-1].api,'responses') # The protocol cannot depend on another model.
+    channel.play_finite.assert_awaited_once();setup[-1].carrier.end.assert_awaited_once()
+    await value.close()
 
 
 @pytest.mark.asyncio
 async def test_human_during_no_message_asset_lookup_never_suppresses_live(setup):
+    from threading import Event
     repo,_,calls,call,manager=setup
     with repo.connection() as db:db.execute("UPDATE ea_phone_call SET voicemail_policy='hang_up' WHERE id=%s",(call['id'],))
     call=await ready(setup)
-    manager.classify=AsyncMock(return_value={'destination':'voicemail','message_already_started':False,'reason':'machine'})
-    channel=Channel();value=manager.attach(call,channel,asyncio.create_task)
-    await value.start();value.detector='machine_end_beep';value.transcript=[{'role':'user','text':'record a message'}]
+    waiting=Event();release=Event();jobs=[]
+    def spawn(coro):
+        task=asyncio.create_task(coro);jobs.append(task);return task
+    channel=Channel();value=manager.attach(call,channel,spawn)
+    await value.start();value.detector='machine_end_beep'
     original=manager.row
     def row(*args,**kwargs):
-        result=original(*args,**kwargs)
-        if kwargs.get('audio'):value.notify_detection('human');value.transcript_event('user','I am here.')
-        return result
+        if kwargs.get('audio'):
+            waiting.set();assert release.wait(2)
+        return original(*args,**kwargs)
     manager.row=row
-    await value.decide_and_play()
+    job=asyncio.create_task(value.play_and_end())
+    assert await asyncio.to_thread(waiting.wait,2)
+    value.notify_detection('human');release.set();await job
+    await asyncio.gather(*jobs)
     assert not value.suppress_live and value.detector=='human'
-    channel.clear.assert_not_awaited();manager.carrier.end.assert_not_awaited()
+    channel.play_finite.assert_not_awaited();manager.carrier.end.assert_not_awaited()
     await value.close()
 
 
@@ -362,18 +370,20 @@ def test_appointment_voicemail_uses_bound_logistics_and_correct_dst_without_priv
 
 
 @pytest.mark.asyncio
-async def test_teardown_during_completion_request_preserves_uncertainty_without_retry(setup):
+async def test_completion_request_outlives_media_teardown_without_retry(setup):
     manager=setup[-1];call=await ready(setup)
     entered=asyncio.Event();release=asyncio.Event()
     async def end(_):entered.set();await release.wait()
     manager.carrier.end=AsyncMock(side_effect=end)
-    manager.classify=AsyncMock(return_value={'destination':'voicemail','message_already_started':False,'reason':'machine'})
     value=manager.attach(call,Channel(),asyncio.create_task)
     await value.start();value.detector='machine_end_beep';value.transcript=[{'role':'user','text':'record a message'}]
-    value.job=asyncio.create_task(value.decide_and_play());await entered.wait()
+    value.job=asyncio.create_task(value.play_and_end());await entered.wait()
     await value.close()
-    assert manager.row(call['id'])['hangup_state']=='hangup_uncertain'
-    manager.carrier.end.assert_awaited_once();assert not manager.active
+    assert manager.row(call['id'])['hangup_state']=='attempting'
+    assert not value.job.done() and not manager.active
+    release.set();await value.job
+    assert manager.row(call['id'])['hangup_state']=='hangup_accepted'
+    manager.carrier.end.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -385,3 +395,51 @@ async def test_failed_clear_during_teardown_still_detaches_and_preserves_interru
     with pytest.raises(RuntimeError):await value.close()
     assert not manager.active and manager.row(call['id'])['state']=='interrupted'
     manager.carrier.end.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_active_raw_audio_during_asset_fetch_aborts_without_asr_and_allows_normal_end(setup):
+    from threading import Event
+    manager=setup[-1];call=await ready(setup)
+    waiting=Event();release=Event()
+    channel=Channel();value=manager.attach(call,channel,asyncio.create_task)
+    await value.start();value.detector='machine_end_beep'
+    original=manager.row
+    def row(*args,**kwargs):
+        if kwargs.get('audio'):
+            waiting.set();assert release.wait(2)
+        return original(*args,**kwargs)
+    manager.row=row
+    job=asyncio.create_task(value.play_and_end())
+    assert await asyncio.to_thread(waiting.wait,2)
+    await value.input_audio(base64.b64encode(b'\x80'*160).decode())
+    release.set();await job
+    assert value.transcript==[] and value.state=='interrupted' and not value.suppress_live
+    assert manager.allow_delegated_end(call['id'])
+    channel.play_finite.assert_not_awaited();manager.carrier.end.assert_not_awaited()
+    await value.close()
+
+
+@pytest.mark.asyncio
+async def test_late_greeting_transcript_during_clip_is_not_a_speech_clock(setup):
+    manager=setup[-1];call=await ready(setup)
+    channel=Channel();value=manager.attach(call,channel,asyncio.create_task)
+    await value.start();value.detector='machine_end_beep'
+    async def play(audio,**kwargs):
+        value.transcript_event('user','At the tone, leave a message.') # Delayed old greeting transcript.
+        return True
+    channel.play_finite.side_effect=play
+    await value.play_and_end()
+    assert value.state=='hangup_accepted'
+    manager.carrier.end.assert_awaited_once();await value.close()
+
+
+@pytest.mark.asyncio
+async def test_armed_teardown_database_failure_still_detaches_and_cancels_job(setup):
+    manager=setup[-1];call=await ready(setup)
+    value=manager.attach(call,Channel(),asyncio.create_task)
+    value.job=asyncio.create_task(asyncio.Event().wait())
+    def fail(*args):raise RuntimeError('diagnostic database unavailable')
+    manager.state=fail
+    with pytest.raises(RuntimeError):await value.close()
+    assert not manager.active and value.job.cancelled()

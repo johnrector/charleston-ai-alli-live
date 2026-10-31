@@ -125,6 +125,18 @@ class CallRepository:
                 JOIN ea_person p ON p.id=c.person_id WHERE c.assistant_id=%s AND c.id=%s''',
                 (self.assistant_id,identifier)).fetchone()
 
+    def save_media_evidence(self,identifier,evidence):
+        with self.repository.connection() as db:
+            call=db.execute('SELECT * FROM ea_phone_call WHERE assistant_id=%s AND id=%s',(self.assistant_id,identifier)).fetchone()
+            if call:self.repository._event(db,'call:'+identifier+':media-evidence','call.media_evidence',
+                {'call_id':identifier,**evidence},person_id=call['person_id'],task_id=call['parent_task_id'])
+
+    def media_evidence(self,identifier):
+        with self.repository.connection() as db:
+            row=db.execute("SELECT facts FROM ea_ledger WHERE assistant_id=%s AND kind='call.media_evidence' AND facts->>'call_id'=%s ORDER BY created_at DESC LIMIT 1",
+                (self.assistant_id,identifier)).fetchone()
+            return row['facts'] if row else None
+
     def voicemail_evidence(self,identifier):
         with self.repository.connection() as db:
             return db.execute('''SELECT policy,asset_state,body,audio_digest,detector_state,state,reason,

@@ -100,5 +100,8 @@ class ConversationHooks:
     async def error(self,code,details=None):
         await asyncio.to_thread(self.calls.error,self.call_id,code,details=details)
 
+    async def media_evidence(self,evidence):
+        await asyncio.to_thread(self.calls.save_media_evidence,self.call_id,evidence)
+
     async def context_update(self,evidence):
         await asyncio.to_thread(self.calls.context_update,self.call_id,evidence)

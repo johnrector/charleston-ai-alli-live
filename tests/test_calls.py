@@ -130,3 +130,13 @@ def test_owner_lookup_cannot_read_another_assistant_call(call_setup,database):
     report=other.submit(another_owner,source_id='foreign-call',title='Private call',instruction='Private')
     foreign=CallRepository(other,'+18435550998').queue(report['id'],another_owner.person_id,'Private mission','foreign-source')
     assert calls.lookup(foreign['id']) is None and calls.lookup(str(foreign['conversation_id'])) is None
+
+
+def test_saved_transport_counts_are_scoped_evidence_and_never_change_call_state(call_setup):
+    repo,owner,person,task,calls=call_setup
+    call=calls.queue(task['id'],person,'One mission','media-test')
+    evidence={'live':{'input_packets_forwarded':200,'transcript_events_received':0},
+        'channel':{'inbound_packets':200,'last_finite_playback':{'mark_name':'exact-mark','played':True}}}
+    calls.save_media_evidence(call['id'],evidence)
+    assert calls.media_evidence(call['id'])=={'call_id':call['id'],**evidence}
+    assert calls.get(call['id'])['state']=='queued'

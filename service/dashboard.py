@@ -224,7 +224,7 @@ def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=Non
         for part in groups:
             content+='<article><h3>'+e('Incoming audio' if part['role']=='user' else 'Alli transcript' if part['role']=='assistant' else part['role'])+'</h3><p class="small">'+e(part['start_ms'])+'–'+e(part['end_ms'])+' ms · '+e(part.get('delivery') or 'captured transcript; playback unverified')+'</p><p>'+e(part['text'])+'</p></article>'
         if not groups:content+='<p>No captured transcript.</p>'
-        content+=views.evidence('Raw saved transcript',row['transcript'])+'</section><section class="panel"><h2>Context diagnostics</h2><p>Pending context at session close does not establish whether an earlier message was delivered. Command IDs link future append errors to their acknowledgments; historical errors may lack attribution.</p>'+views.evidence('Saved Live errors',errors)+views.evidence('Context append receipts',updates)+'</section>'
+        content+=views.evidence('Raw saved transcript',row['transcript'])+'</section><section class="panel"><h2>Context diagnostics</h2><p>Pending context at session close does not establish whether an earlier message was delivered. Command IDs link future append errors to their acknowledgments; historical errors may lack attribution.</p>'+views.evidence('Saved Live errors',errors)+views.evidence('Context append receipts',updates)+views.evidence('Transport and Live event counts',await asyncio.to_thread(calls.media_evidence,row['id']))+'</section>'
         return page('Call evidence',content)
 
     @router.get('/dashboard/promises')
