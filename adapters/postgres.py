@@ -234,7 +234,11 @@ class PostgresRepository:
     def owner_commitments(self,actor,limit=100):
         with self.connection() as db:
             self._person(db,actor,owner=True)
-            return db.execute('SELECT * FROM ea_commitment WHERE assistant_id=%s ORDER BY due_at DESC LIMIT %s',
+            return db.execute('''SELECT c.*,p.name AS person_name FROM ea_commitment c
+                JOIN ea_person p ON p.assistant_id=c.assistant_id AND p.id=c.person_id WHERE c.assistant_id=%s
+                ORDER BY CASE WHEN c.state IN ('planned','queued','blocked') THEN 0 ELSE 1 END,
+                    CASE WHEN c.state IN ('planned','queued','blocked') THEN c.due_at END ASC NULLS LAST,
+                    c.due_at DESC LIMIT %s''',
                               (self.profile.id,min(max(limit,1),500))).fetchall()
 
     def recent_ledger(self,actor,*,person_id=None,task_id=None,limit=100):

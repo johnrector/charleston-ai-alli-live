@@ -91,7 +91,9 @@ class Scheduler:
             owner=person['kind']=='owner' and actor.verified_owner and bool(actor.proof_id)
             rows=db.execute('''SELECT * FROM ea_schedule WHERE assistant_id=%s
                 AND (%s OR person_id=%s AND NOT authority @> '{"verified_owner":true}'::jsonb)
-                ORDER BY created_at DESC LIMIT 200''',
+                ORDER BY CASE WHEN state IN ('creating','active') THEN 0 WHEN state='paused' THEN 1 ELSE 2 END,
+                    CASE WHEN state IN ('creating','active','paused') AND timing->>'type'='once'
+                        THEN (timing->>'run_at')::bigint END ASC NULLS LAST,created_at DESC LIMIT 200''',
                 (self.repository.profile.id,owner,actor.person_id)).fetchall()
             runs=db.execute('''SELECT * FROM (SELECT r.schedule_id,r.invocation_id,r.task_id,r.scheduled_at,
                 t.state,t.result,row_number() OVER(PARTITION BY r.schedule_id ORDER BY r.created_at DESC) AS n

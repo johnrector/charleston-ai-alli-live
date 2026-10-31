@@ -144,3 +144,64 @@ async def test_voice_webhook_streams_bytes_and_never_creates_twilio_conversation
             call=app.state.calls.by_provider(data['CallSid'])
             assert app.state.calls.get(call['id'])['scope']=='owner'
             assert (await carrier_post(http,'/inbound/voice',data)).text==response.text
+
+
+@pytest.mark.asyncio
+async def test_redesigned_dashboard_reads_saved_state_without_work_or_paid_probes(application_setup):
+    from adapters.oversight import Oversight
+    from alli_core.authority import Actor
+    repository,sdk,build=application_setup
+    app=build()
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url=BASE) as http:
+            paths=('/dashboard','/dashboard/activity','/dashboard/policies','/dashboard/health','/dashboard/promises')
+            for path in paths:assert (await http.get(path)).status_code==303
+            challenge=app.state.sessions.start()
+            http.cookies.set('alli_owner_challenge',challenge.token)
+            signed=await http.post('/dashboard/sign-in',data={'code':challenge.code},headers={'Origin':BASE})
+            assert signed.status_code==303
+            before=repository.ready_tasks()
+            pages={path:await http.get(path) for path in paths}
+            assert all(page.status_code==200 for page in pages.values())
+            assert 'No future work saved.' in pages['/dashboard'].text
+            assert 'Appointment confirmation' in pages['/dashboard/policies'].text
+            assert 'No calendar-to-call planner is enabled' in pages['/dashboard/policies'].text
+            assert 'No saved diagnostic' in pages['/dashboard/health'].text
+            assert 'No saved calls' in pages['/dashboard/promises'].text
+            assert all('script-src' not in page.headers['Content-Security-Policy'] and
+                "default-src 'none'" in page.headers['Content-Security-Policy'] for page in pages.values())
+            assert repository.ready_tasks()==before and sdk.messages.create.call_count==0
+            assert repository.owner_commitments(Actor('alli',repository.bootstrap_owner(OWNER),'dashboard',True,'test'))==[]
+
+
+@pytest.mark.asyncio
+async def test_relationship_policy_and_diagnostic_views_escape_content_and_preserve_evidence(application_setup):
+    import json
+    from adapters.relationships import Relationships
+    from alli_core.authority import Actor
+    from psycopg.types.json import Jsonb
+    repository,sdk,build=application_setup
+    app=build()
+    async with app.router.lifespan_context(app):
+        owner=Actor('alli',repository.bootstrap_owner(OWNER),'dashboard',True,'test-owner')
+        person=repository.save_person(owner,name='Test Person',phone='+18435550122')
+        source=repository.begin_conversation('+18435550122','evidence','sms')['conversation']['id']
+        repository.save_transcript(str(source),[{'role':'user','text':'A source'}],finalized=True)
+        Relationships(repository).remember(owner,str(person['id']),'<script>alert(1)</script>',source_conversation_id=str(source))
+        collection=repository.create_collection(owner,'Owner operational business rules',{'type':'object'})
+        repository.put_record(owner,str(collection['id']),{'rule_key':'example','policy':{'instruction':'<b>Not markup</b>'},'source':{'owner':'Test owner'}})
+        result={'ok':False,'state':'completed','checks':{'voice':{'ok':False,'error':'provider_failure'}},'limits':'AI dependencies only'}
+        with repository.connection() as db:
+            db.execute('''INSERT INTO ea_diagnostic_run(assistant_id,check_date,request_id,release,result)
+                VALUES('alli',current_date,'dashboard-read-test','test-release',%s)''',(Jsonb(result),))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url=BASE) as http:
+            challenge=app.state.sessions.start();http.cookies.set('alli_owner_challenge',challenge.token)
+            await http.post('/dashboard/sign-in',data={'code':challenge.code},headers={'Origin':BASE})
+            person_page=await http.get('/dashboard/people/'+str(person['id']))
+            assert '&lt;script&gt;' in person_page.text and '<script>' not in person_page.text
+            assert 'Source '+str(source) in person_page.text and 'Owner-private' in person_page.text
+            policy=await http.get('/dashboard/policies')
+            assert '&lt;b&gt;' in policy.text and 'Revision 1' in policy.text and 'Test owner' in policy.text
+            health=await http.get('/dashboard/health')
+            assert 'needs review' in health.text and 'provider_failure' in health.text
+            assert sdk.messages.create.call_count==0

@@ -1,4 +1,5 @@
 import html
+from pathlib import Path
 from urllib.parse import parse_qsl,urlsplit
 
 from fastapi import HTTPException
@@ -30,18 +31,25 @@ async def form(request,maximum=65536):
     return dict(pairs)
 
 
+DASHBOARD_STYLE = Path(__file__).with_name('dashboard.css').read_text()
+
+
 def page(title,content,*,status=200):
-    document='''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>'''+escape(title)+''' · Alli</title><style>
-    :root{color-scheme:light;font:16px/1.55 system-ui;color:#203e31;background:#f6f5ee}*{box-sizing:border-box}
-    body{max-width:1100px;margin:auto;padding:28px}header{display:flex;justify-content:space-between;gap:24px;flex-wrap:wrap}
-    a{color:#285a44}nav{display:flex;gap:22px;flex-wrap:wrap}h1,h2{font-family:Georgia,serif;line-height:1.13}h1{font-size:clamp(32px,6vw,58px)}
-    main{margin-top:36px}section,article{background:#fffef9;border:1px solid #dedfd3;border-radius:8px;padding:24px;margin:18px 0}
-    input,textarea,select,button{font:inherit;max-width:100%;padding:11px;border:1px solid #b5c0b5;border-radius:4px}
-    input,textarea{width:100%}label{display:block;margin:14px 0}button,.button{background:#285a44;color:white;cursor:pointer;padding:12px 20px;border:0;display:inline-block;text-decoration:none}
-    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:18px}.grid article{margin:0}
-    .muted{color:#667166}.error{color:#a03725}pre{white-space:pre-wrap;overflow-wrap:anywhere}.row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-    </style><header><strong>alli · John's private space</strong><nav><a href="/dashboard">Activity</a><a href="/dashboard/people">People</a><a href="/dashboard/work">Work</a><a href="/dashboard/promises">Promises</a><a href="/dashboard/connections">Connections</a></nav></header><main>'''+content+'''</main></html>'''
+    navigation=[('Today','/dashboard','◌'),('People','/dashboard/people','◎'),
+        ('Calls & work','/dashboard/promises','◷'),('Rules','/dashboard/policies','≡'),
+        ('Health','/dashboard/health','♡'),('Activity','/dashboard/activity','↗')]
+    selected={'Promises':'Calls & work','Work':'Calls & work','Connections':'Health'}.get(title,title)
+    nav=''.join('<a href="'+url+'"'+(' aria-current="page"' if label==selected else '')+
+        '><span aria-hidden="true">'+icon+'</span>'+label+'</a>' for label,url,icon in navigation)
+    document=('<!doctype html><html lang="en"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1"><title>'+escape(title)+' · Alli</title>'
+        '<style>'+DASHBOARD_STYLE+'</style></head><body><div class="shell"><aside class="sidebar">'
+        '<a class="brand" href="/dashboard"><span class="brand-mark" aria-hidden="true">a</span>alli</a>'
+        '<p class="brand-caption">John’s private space</p><nav class="nav" aria-label="Main">'+nav+'</nav>'
+        '<div class="sidebar-foot"><div class="owner"><span class="avatar">JR</span>'
+        '<div>John Rector<small>Private owner access</small></div></div>'
+        '<p>Conversation with continuity.<br>Work with receipts.</p></div></aside>'
+        '<div class="workspace"><main class="main">'+content+'</main></div></div></body></html>')
     return HTMLResponse(document,status_code=status,headers={
         'Cache-Control':'no-store','Referrer-Policy':'same-origin','X-Content-Type-Options':'nosniff',
         'Content-Security-Policy':"default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"})

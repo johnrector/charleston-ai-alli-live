@@ -11,6 +11,9 @@ from starlette.responses import RedirectResponse
 
 from adapters.owner_sessions import RateLimited
 from .web_helpers import escape as e,form,page,safe_return
+from . import dashboard_views as views
+from adapters.oversight import Oversight
+from adapters.relationships import Relationships
 
 
 SESSION='alli_owner_session'
@@ -19,6 +22,8 @@ CHALLENGE='alli_owner_challenge'
 
 def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=None):
     router=APIRouter()
+    oversight,relationships=Oversight(repository),Relationships(repository)
+    zone=repository.profile.timezone
 
     async def owner(request: Request):
         actor=await asyncio.to_thread(sessions.actor,request.cookies.get(SESSION,''))
@@ -96,14 +101,37 @@ def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=Non
         return response
 
     def events(rows):
-        return ''.join('<article><small>'+e(row['created_at'])+' · '+e(row['kind'])+'</small><pre>'+
-            e(json.dumps(row['facts'],ensure_ascii=False,default=str,indent=2))+'</pre></article>' for row in reversed(rows)) or '<p>No activity yet.</p>'
+        content=''
+        for row in reversed(rows):
+            facts=row['facts']
+            label=facts.get('summary') or facts.get('title') or row['kind'].replace('.',' · ')
+            content+='<article class="panel activity-item"><p class="eyebrow">'+e(views.when(row['created_at'],zone))+' · '+e(row['kind'])+'</p><p class="outcome">'+e(str(label)[:1200])+'</p>'+views.evidence('Read saved receipt',facts)+'</article>'
+        return content or '<p class="small">No activity yet.</p>'
 
     @router.get('/dashboard')
     async def overview(request: Request):
         actor=await owner(request)
+        summary,schedules,commitments=await asyncio.gather(
+            asyncio.to_thread(oversight.summary,actor),
+            asyncio.to_thread(scheduler.list,actor) if scheduler else asyncio.sleep(0,result=[]),
+            asyncio.to_thread(repository.owner_commitments,actor))
+        return page('Today',views.overview(summary,schedules,commitments,zone))
+
+    @router.get('/dashboard/activity')
+    async def activity(request: Request):
+        actor=await owner(request)
         rows=await asyncio.to_thread(repository.recent_ledger,actor,limit=60)
-        return page('Activity','<h1>What Alli is doing.</h1>'+events(rows[-60:]))
+        return page('Activity',views.title('The record of the work.','Actual receipts and reported outcomes, with their source evidence.',zone)+events(rows))
+
+    @router.get('/dashboard/policies')
+    async def policies(request: Request):
+        actor=await owner(request)
+        return page('Rules',views.policies(await asyncio.to_thread(oversight.policies,actor),zone))
+
+    @router.get('/dashboard/health')
+    async def health(request: Request):
+        actor=await owner(request)
+        return page('Health',views.health(await asyncio.to_thread(oversight.summary,actor),settings.release,zone))
 
     @router.get('/dashboard/people')
     async def people(request: Request):
@@ -111,7 +139,7 @@ def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=Non
         rows=await asyncio.to_thread(repository.list_people,actor,limit=500)
         query=request.query_params.get('q','').casefold().strip()
         if query:rows=[row for row in rows if query in (row['name']+' '+(row.get('phone') or '')).casefold()]
-        content='<h1>Your people, remembered.</h1><p>Most recent conversations first.</p><form><label>Find a person or number<input name="q" value="'+e(query)+'"></label><button>Find</button></form><div class="grid">'
+        content=views.title('Your people, remembered.','A relationship history, not just an address book. Most recent conversations first.',zone)+'<form><label>Find a person or number<input name="q" value="'+e(query)+'"></label><button>Find</button></form><div class="grid">'
         for row in rows:
             content+='<article><small>'+e(row['status'])+'</small><h2><a href="/dashboard/people/'+e(row['id'])+'">'+e(row['name'] or 'Name not supplied')+'</a></h2><p>'+e(row.get('phone') or '')+'</p><p>'+e(row['email'])+'</p><small>Last conversation: '+e(row['last_activity'] or 'None yet')+'</small></article>'
         content+='</div><section><h2>Add a person</h2><form method="post" action="/dashboard/people">'+hidden(request)
@@ -139,6 +167,8 @@ def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=Non
             for status,label in [('approved','Approve / reactivate'),('suspended','Suspend'),('deleted','Delete')]:
                 content+='<button name="status" value="'+status+'">'+label+'</button>'
             content+='</div><p class="muted">Deletion retains the activity history and blocks access. Reactivation does not replay cancelled work.</p></form></section>'
+        context=await asyncio.to_thread(relationships.read,actor,person_id)
+        content+=views.relationship(context,zone)
         activity=await asyncio.to_thread(repository.recent_ledger,actor,person_id=person_id,limit=60)
         return page(row['name'] or 'Contact',content+'<h2>Activity with Alli</h2>'+events(activity[-60:]))
 
@@ -176,15 +206,18 @@ def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=Non
     async def promises(request: Request):
         actor=await owner(request)
         rows=await asyncio.to_thread(repository.owner_commitments,actor)
-        content='<h1>Promises and scheduled work.</h1>'
+        content=views.title('Calls, commitments & work.','A saved schedule, work in progress and a delivered result are different things.',zone)
+        content+='<p class="small">Showing up to 200 saved schedules and 100 commitments, with pending items first. Reload to refresh saved state.</p>'
+        content+='<a class="text-link" href="/dashboard/work">All delegated work →</a>'
         if scheduler is not None:
             for item in await asyncio.to_thread(scheduler.list,actor):
-                content+='<article><small>OpenAI native schedule · '+e(item['state'])+'</small><h2>'+e(item['title'])+'</h2>'
+                content+='<article class="panel"><small>OpenAI native schedule · '+e(item['state'])+'</small><h2>'+e(item['title'])+'</h2>'
                 when=item['timing']
                 if when['type']=='once':
                     label=datetime.fromtimestamp(when['run_at'],timezone.utc).astimezone(ZoneInfo(repository.profile.timezone)).strftime('%A, %B %-d at %-I:%M %p %Z')
                 else:label='Recurring: '+when['expression']+' · '+when['timezone']
-                content+='<p>'+e(label)+'</p><pre>'+e(item['instruction'])+'</pre>'
+                content+='<p class="small">'+e(label)+'</p>'+views.evidence('Read assignment and schedule identity',{'id':item['id'],'provider_id':item['provider_id'],'revision':item['revision'],'instruction':item['instruction'],'updated_at':item['updated_at']})
+                content+='<p class="small">Schedule state: '+e(item['state'])+'. Each run below has its own work outcome. A completed schedule does not establish communication delivery.</p>'
                 if item['control_state']:content+='<p>Schedule change awaiting confirmation: '+e(item['control_state'])+'</p>'
                 for run in item['recent_runs']:
                     content+='<p>Run: <a href="/dashboard/work/'+e(run['task_id'])+'">'+e(run['state'])+'</a> · '+e(run['scheduled_at'])+'</p>'
@@ -192,10 +225,12 @@ def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=Non
                     content+='<form method="post" action="/dashboard/schedules/'+e(item['id'])+'/'+action+'">'+hidden(request)+'<input type="hidden" name="revision" value="'+e(item['revision'])+'"><button>'+action.title()+' schedule</button></form>'
                 content+='</article>'
         for row in rows:
-            content+='<article><small>'+e(row['state'])+' · '+e(row['due_at'])+'</small><pre>'+e(row['instruction'])+'</pre>'
+            content+='<article class="panel"><div class="panel-head"><h2>'+e(row['kind'].upper())+' · '+e(row.get('person_name') or 'Saved recipient')+'</h2>'+views.badge(row['state'])+'</div><p class="small">'+e(views.when(row['due_at'],zone))+'</p>'+views.evidence('Read saved commitment',{'id':row['id'],'instruction':row['instruction'],'state':row['state'],'due_at':row['due_at']})
             if row['state']=='planned':
                 content+='<form method="post" action="/dashboard/promises/'+e(row['id'])+'/cancel">'+hidden(request)+'<input type="hidden" name="revision" value="'+e(row['revision'])+'"><button>Cancel scheduled text</button></form>'
             content+='</article>'
+        summary=await asyncio.to_thread(oversight.summary,actor)
+        content+=views.call_history(summary['calls'],zone)
         return page('Promises',content)
 
     @router.post('/dashboard/promises/{commitment_id}/cancel')

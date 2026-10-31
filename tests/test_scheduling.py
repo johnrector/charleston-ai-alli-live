@@ -382,3 +382,18 @@ async def test_dot_future_sms_uses_native_schedule_and_no_immediate_transport(da
                 assert len(scheduler.native.saved)==1
                 cancelled=await client.call_tool('cancel_text_message',{'request_id':'future-text'})
                 assert cancelled.structured_content['schedule']['state']=='cancelled'
+
+
+@pytest.mark.asyncio
+async def test_active_schedule_remains_visible_after_many_completed_records(setup):
+    repo,owner,source,scheduler,native,_=setup
+    saved=await scheduler.create(owner,source['id'],'real-future','Future work','Do the authorized work',future())
+    from psycopg.types.json import Jsonb
+    with repo.connection() as db:
+        db.execute('''INSERT INTO ea_schedule(id,assistant_id,person_id,source_task_id,source_id,title,
+            instruction,timing,authority,state,launch_digest,launch_sealed)
+            SELECT 'old-'||n,'alli',%s,%s,'old-'||n,'Old completed work','Completed',%s,%s,
+                'completed','digest-'||n,'unused' FROM generate_series(1,210) AS n''',
+            (owner.person_id,source['id'],Jsonb({'type':'once','run_at':1}),Jsonb(source['authority'])))
+    rows=scheduler.list(owner)
+    assert len(rows)==200 and rows[0]['id']==saved['schedule']['id']
