@@ -49,6 +49,9 @@ def create_tool_server(repository, base_url, *, google=None,shopify=None,deliver
         auth=AuthSettings(issuer_url=base_url,resource_server_url=resource,
                           required_scopes=['task:execute'],validate_token_resource=True))
     gate = ActionGate(repository)
+    from .relationships import Relationships
+    from .oversight import Oversight
+    relationships,oversight=Relationships(repository),Oversight(repository)
 
     def principal():
         token = get_access_token()
@@ -133,6 +136,21 @@ def create_tool_server(repository, base_url, *, google=None,shopify=None,deliver
     @server.tool(structured_output=True, description='Read the address book, ordered by recent conversations. Owner only.')
     async def list_people(limit:int=100) -> dict[str,Any]:
         return await operation('list_people', {'limit':limit}, repository.list_people)
+
+    @server.tool(structured_output=True,description='Read owner-private relationship notes with saved evidence and open commitments. Notes are observations, not independent verification. Owner only.')
+    async def relationship_context(person_id:str) -> dict[str,Any]:
+        return await operation('relationship_context',dict(person_id=person_id),relationships.read)
+
+    @server.tool(structured_output=True,description='Save a concise owner-private relationship observation backed by exactly one saved task or finalized conversation for that person. Never save an inference as a verified fact. Optional supersedes_id corrects an earlier note without erasing evidence. Does not approve contacts, create commitments or authorize account access. Owner only.')
+    async def remember_relationship(person_id:str,note:str,source_task_id:str|None=None,
+        source_conversation_id:str|None=None,supersedes_id:str|None=None) -> dict[str,Any]:
+        return await operation('remember_relationship',dict(person_id=person_id,note=note,
+            source_task_id=source_task_id,source_conversation_id=source_conversation_id,
+            supersedes_id=supersedes_id),relationships.remember,writes=True)
+
+    @server.tool(structured_output=True,description='Read saved operating rules and their source/revision. Guidance does not create a schedule or broaden permissions. Appointment confirmation automation is not configured. Owner only.')
+    async def operating_policies() -> dict[str,Any]:
+        return await operation('operating_policies',{},oversight.policies)
 
     @server.tool(structured_output=True, description='Create or edit a contact. Saving contact details does not approve access. Editing requires its current revision.')
     async def save_person(name:str, phone:str, email:str='', person_id:str|None=None,

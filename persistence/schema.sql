@@ -388,3 +388,28 @@ CREATE TABLE IF NOT EXISTS ea_diagnostic_run (
     PRIMARY KEY(assistant_id,check_date),
     UNIQUE(assistant_id,request_id)
 );
+
+-- Additive, empty on migration. Notes retain their evidence and correction chain.
+-- All notes are owner-private; this table grants no contact or account access.
+CREATE TABLE IF NOT EXISTS ea_relationship_note (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    assistant_id text NOT NULL,
+    person_id uuid NOT NULL,
+    body text NOT NULL CHECK(length(body) BETWEEN 1 AND 800),
+    source_key text NOT NULL,
+    source_task_id text,
+    source_conversation_id uuid,
+    supersedes_id uuid,
+    superseded_by uuid,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(assistant_id,id),
+    UNIQUE(assistant_id,source_key),
+    FOREIGN KEY(assistant_id,person_id) REFERENCES ea_person(assistant_id,id),
+    FOREIGN KEY(assistant_id,source_task_id) REFERENCES ea_task(assistant_id,id),
+    FOREIGN KEY(assistant_id,source_conversation_id) REFERENCES ea_conversation(assistant_id,id),
+    FOREIGN KEY(assistant_id,supersedes_id) REFERENCES ea_relationship_note(assistant_id,id),
+    FOREIGN KEY(assistant_id,superseded_by) REFERENCES ea_relationship_note(assistant_id,id),
+    CHECK((source_task_id IS NOT NULL)::int + (source_conversation_id IS NOT NULL)::int = 1)
+);
+CREATE INDEX IF NOT EXISTS ea_relationship_current ON ea_relationship_note(assistant_id,person_id,created_at DESC)
+    WHERE superseded_by IS NULL;

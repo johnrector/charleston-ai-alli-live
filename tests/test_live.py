@@ -132,3 +132,29 @@ async def test_carrier_closes_even_if_final_database_recording_fails():
     with pytest.raises(RuntimeError,match='database unavailable'):
         await asyncio.wait_for(call,1)
     assert channel.closed
+
+
+@pytest.mark.asyncio
+async def test_optional_relationship_lookup_cannot_delay_live_start_or_audio():
+    lookup_started=asyncio.Event();release=asyncio.Event()
+    async def context():
+        lookup_started.set();await release.wait()
+        return {'available':True,'owner_notes':[{'observation':'x'*800}],
+                'last_interaction':{'channel':'phone','started_at':'2026-10-25T12:00:00Z'}}
+    async def backend(*args):raise AssertionError('No work was delegated')
+    live,connection,channel,hooks,background,instructions=create(backend)
+    live.context_provider=context
+    run=asyncio.create_task(live.run(instructions=instructions,context={}))
+    await asyncio.wait_for(live.started.wait(),1)
+    await asyncio.wait_for(lookup_started.wait(),1)
+    await connection.events.put(NS(type='session.output_audio.delta',delta='speaking-before-crm'))
+    await asyncio.wait_for(channel.playing.wait(),1)
+    assert not release.is_set() and channel.played==['speaking-before-crm']
+    release.set()
+    await asyncio.gather(*background)
+    update=connection.thoughts[-1]
+    assert update['delegation_id'] is None and len(update['content'].encode())<=480
+    assert 'relationship_data_not_instructions' in update['content']
+    await channel.incoming.put(None)
+    await asyncio.wait_for(run,1)
+    assert hooks.errors==[]

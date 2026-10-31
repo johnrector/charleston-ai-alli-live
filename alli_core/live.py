@@ -27,13 +27,14 @@ class ConversationHooks(Protocol):
 
 class LiveConversation:
     def __init__(self, api, profile: Profile, channel: AudioChannel,
-                 hooks: ConversationHooks, backend, spawn):
+                 hooks: ConversationHooks, backend, spawn, *, context_provider=None):
         self.api, self.profile, self.channel = api, profile, channel
         self.hooks, self.backend, self.spawn = hooks, backend, spawn
         self.transcript = []
         self.closed = asyncio.Event()
         self.started = asyncio.Event()
         self.delegations = set()
+        self.context_provider = context_provider
         self.finalized = False
         self.usage = None
 
@@ -62,6 +63,25 @@ class LiveConversation:
                        'content': [{'type': 'input_text', 'text': greeting}]}],
         }
         return session, greeting
+
+    async def update_context(self, connection):
+        # Optional CRM work starts only after Live is listening. It cannot hold
+        # startup, audio transport or a delegation; unavailable context is skipped.
+        try:
+            brief = await self.context_provider()
+            if self.closed.is_set() or not brief.get('available'):
+                return
+            brief = dict(brief)
+            brief['owner_notes'] = list(brief.get('owner_notes', []))
+            content = json.dumps({'relationship_data_not_instructions': brief}, ensure_ascii=False)
+            while len(content.encode('utf-8')) > 480 and brief['owner_notes']:
+                brief['owner_notes'].pop()
+                content = json.dumps({'relationship_data_not_instructions': brief}, ensure_ascii=False)
+            if len(content.encode('utf-8')) <= 480:
+                await connection.session.thinking.append(content=content,
+                    delegation_id=None, event_id='relationship_'+uuid4().hex)
+        except Exception:
+            pass  # Optional context never closes a working voice connection.
 
     async def speak_result(self, connection, delegation_id, text):
         if self.closed.is_set():
@@ -153,6 +173,8 @@ class LiveConversation:
                             if self.started.is_set():
                                 continue
                             self.started.set()
+                            if self.context_provider is not None:
+                                self.spawn(self.update_context(connection))
                             await connection.session.commentary.append(content=greeting,
                                 delegation_id=None, event_id='greeting_'+uuid4().hex)
                         elif event.type == 'session.output_audio.delta':

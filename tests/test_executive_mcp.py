@@ -150,3 +150,28 @@ async def test_cloud_store_tools_deny_friends_and_do_not_keep_raw_order_data(dat
     with repo.connection() as db:
         saved=db.execute('SELECT receipt FROM ea_action WHERE task_id=%s',(task['id'],)).fetchall()
     assert 'PRIVATE ORDER DATA' not in str(saved) and 'PRIVATE ORDER DATA' not in str(repo.ledger(owner))
+
+
+@pytest.mark.asyncio
+async def test_relationship_and_operating_rule_tools_keep_owner_boundary(database):
+    repo,owner,task,token,app=setup_server(database)
+    async with app.router.lifespan_context(app):
+        async with connected(app,token) as client:
+            tools=await client.list_tools()
+            assert {'relationship_context','remember_relationship','operating_policies'} <= {t.name for t in tools.tools}
+            saved=await client.call_tool('remember_relationship',{'person_id':owner.person_id,
+                'note':'Owner reports that concise answers are useful.','source_task_id':task['id']})
+            assert saved.structured_content['ok']
+            rows=await client.call_tool('relationship_context',{'person_id':owner.person_id})
+            assert rows.structured_content['record']['notes'][0]['source_task_id']==task['id']
+            rules=await client.call_tool('operating_policies')
+            assert rules.structured_content['record']['appointment_confirmation']['automated'] is False
+        person=repo.save_person(owner,name='Contact',phone='+18435550102')
+        repo.set_person_status(owner,str(person['id']),'approved',1)
+        contact=Actor('alli',str(person['id']),'sms')
+        job=repo.submit(contact,source_id='relationship-boundary',title='Own request',instruction='Own request')
+        async with connected(app,repo.issue_tool_grant(job['id'])) as client:
+            for name,args in [('relationship_context',{'person_id':owner.person_id}),
+                ('operating_policies',{}),('remember_relationship',{'person_id':str(person['id']),
+                    'note':'Do not grant this write','source_task_id':job['id']})]:
+                assert (await client.call_tool(name,args)).is_error

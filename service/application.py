@@ -21,6 +21,7 @@ from adapters.account_connections import AccountConnections
 from adapters.shopify import ShopifyAccount
 from adapters.text_conversation import TextConversation
 from adapters.diagnostics import ServiceDiagnostics
+from adapters.relationships import Relationships
 from adapters.bootstrap import seed_existing_records,preserve_birthday
 from adapters.telephony import MediaChannel
 from alli_core.authority import Actor,Conflict,PermissionDenied
@@ -61,6 +62,7 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
     shopify=ShopifyAccount(connections)
     from adapters.scheduling import Scheduler
     scheduler=Scheduler(repository,api,settings.google_key,settings.base_url)
+    relationships=Relationships(repository)
     worker=Worker(repository,runtime,outbox,carrier,settings.base_url,calls=calls,computer=computer,
                   release=settings.release,scheduler=scheduler,text_conversation=TextConversation(repository,api))
     tools=tool_http_app(create_tool_server(repository,settings.base_url,
@@ -261,7 +263,8 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
             await channel.handshake()
             await asyncio.to_thread(calls.attach_media,identifier,call['provider_id'])
             hooks=ConversationHooks(repository,calls,outbox,identifier)
-            conversation=LiveConversation(api,repository.profile,channel,hooks,hooks.backend,spawn)
+            conversation=LiveConversation(api,repository.profile,channel,hooks,hooks.backend,spawn,
+                context_provider=lambda:relationships.voice_brief(call))
             context={'caller':{'name':call['name'],'status':call['person_status']},
                 'scope':call['scope'],'direction':call['direction'],'mission':call['instruction'],
                 'principal':repository.profile.principal,'public_facts':repository.profile.public_facts,
