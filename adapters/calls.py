@@ -59,10 +59,16 @@ class CallRepository:
     def queue(self,task_id,person_id,instruction,source_id,*,allowed_tools=None,invitation_email=''):
         if not isinstance(instruction,str) or not 1<=len(instruction)<=12000:
             raise ValueError('Supply a concise call mission')
+        workflow=getattr(self,'people_workflow',None)
+        prepared=workflow.queue_allowed(task_id,person_id) if workflow else None
+        if workflow:instruction=workflow.appointment_mission(task_id) or instruction
         with self.repository.connection() as db:
             task=self.repository._task(db,task_id,lock=True)
             if not task or not self.repository._permitted(db,task_id,writes=False):
                 raise PermissionDenied('Assignment is unavailable')
+            if task['context'].get('appointment_id'):
+                from .people_workflow import VOICE_TOOLS
+                allowed_tools=VOICE_TOOLS
             if task['scope']!='owner' and str(task['person_id'])!=person_id:
                 raise PermissionDenied('This assignment can only request a callback to its own caller')
             prior=db.execute('''SELECT * FROM ea_phone_call WHERE assistant_id=%s
@@ -97,6 +103,8 @@ class CallRepository:
                 (identifier,self.assistant_id,conversation['id'],person_id,task_id,source_id,
                  instruction,self.phone,recipient['address'],Jsonb(list(allowed_tools)) if allowed_tools is not None else None,
                  invitation_email)).fetchone()
+            if prepared and prepared.get('id'):
+                row=db.execute('UPDATE ea_phone_call SET preparation_id=%s WHERE id=%s RETURNING *',(prepared['id'],identifier)).fetchone()
             db.execute('''UPDATE ea_task SET context=jsonb_set(context,'{pending_calls}',
                 coalesce(context->'pending_calls','[]'::jsonb) || %s),updated_at=now() WHERE id=%s''',
                 (Jsonb([identifier]),task_id))
@@ -106,7 +114,10 @@ class CallRepository:
 
     def get(self,identifier):
         with self.repository.connection() as db:
-            return db.execute('''SELECT c.*,v.transcript,v.finalized,v.scope,p.name,p.status AS person_status,
+            return db.execute('''SELECT c.*,v.transcript,v.finalized,v.scope,coalesce((SELECT nullif(r.preferred_name,'') FROM ea_person_preparation r
+                WHERE r.assistant_id=c.assistant_id AND r.person_id=c.person_id AND r.person_revision=p.revision
+                AND r.state='ready' AND ((c.direction='outbound' AND r.id=c.preparation_id)
+                    OR (c.direction='inbound' AND c.number_verified)) ORDER BY r.prepared_at DESC LIMIT 1),p.name) AS name,p.status AS person_status,
                 p.kind AS person_kind FROM ea_phone_call c JOIN ea_conversation v ON v.id=c.conversation_id
                 JOIN ea_person p ON p.id=c.person_id WHERE c.assistant_id=%s AND c.id=%s''',
                 (self.assistant_id,identifier)).fetchone()
@@ -137,6 +148,7 @@ class CallRepository:
         with self.repository.connection() as db:
             while True:
                 row=db.execute('''SELECT * FROM ea_phone_call WHERE assistant_id=%s AND state='queued'
+                    AND (preparation_id IS NULL OR updated_at<now()-interval '10 seconds')
                     ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED''',(self.assistant_id,)).fetchone()
                 if not row:return None
                 task=self.repository._task(db,row['parent_task_id'])
@@ -148,6 +160,15 @@ class CallRepository:
                 row=db.execute('UPDATE ea_phone_call SET state=%s,updated_at=now() WHERE id=%s RETURNING *',
                                (state,row['id'])).fetchone()
                 if allowed:return row
+
+    def defer_before_dial(self,identifier):
+        with self.repository.connection() as db:
+            db.execute("UPDATE ea_phone_call SET state='queued',updated_at=now() WHERE assistant_id=%s AND id=%s AND state='attempting' AND provider_id IS NULL",(self.assistant_id,identifier))
+
+    def cancel_before_dial(self,identifier,reason):
+        with self.repository.connection() as db:
+            row=db.execute("UPDATE ea_phone_call SET state='cancelled',carrier_status='canceled',updated_at=now() WHERE assistant_id=%s AND id=%s AND state='attempting' AND provider_id IS NULL RETURNING *",(self.assistant_id,identifier)).fetchone()
+            if row:self.repository._event(db,'call:'+identifier+':held','call.held_before_dial',{'call_id':identifier,'reason':reason},person_id=row['person_id'],task_id=row['parent_task_id'])
 
     def bind(self,identifier,provider_id,*,to,from_,status,duration=None):
         if status not in STATUSES:

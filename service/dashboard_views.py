@@ -51,31 +51,29 @@ def upcoming(schedules, commitments, zone):
 def overview(summary, schedules, commitments, zone, release=''):
     active=[s for s in schedules if s['state'] in {'active','creating'}]
     queued=[c for c in summary['calls'] if c['direction']=='outbound' and c['state'] in {'queued','attempting','accepted','uncertain'}]
-    content=title('A little clarity for your day.','Upcoming commitments, work to review, and the records behind every outcome.',zone)
-    content+='<div class="metrics"><div class="metric"><div class="metric-label">Future assignments</div><strong>'+str(len(active))+'</strong><span>Active schedules in this view</span></div><div class="metric"><div class="metric-label">Call attempts</div><strong>'+str(len(queued))+'</strong><span>Pending or unconfirmed in this view</span></div><div class="metric"><div class="metric-label">Appointment calls</div><strong style="font-size:23px">Not configured</strong><span>Operating policy needed</span></div></div>'
+    content=title('A little clarity for your day.','Upcoming commitments, exceptions, and the evidence needed to diagnose a problem.',zone)
+    content+='<div class="metrics"><div class="metric"><div class="metric-label">Future assignments</div><strong>'+str(len(active))+'</strong><span>Active schedules in this view</span></div><div class="metric"><div class="metric-label">Call attempts</div><strong>'+str(len(queued))+'</strong><span>Pending or unconfirmed in this view</span></div><div class="metric"><div class="metric-label">Appointment calls</div><strong style="font-size:23px">'+e(summary.get('appointment_policy',{}).get('state','not configured').replace('_',' '))+'</strong><span>Saved policy and native planner</span></div></div>'
     content+='<div class="columns"><div class="stack"><section class="panel"><div class="panel-head"><h2>Upcoming commitments</h2><a href="/dashboard/promises">View all</a></div>'+upcoming(schedules,commitments,zone)+'</section>'
-    content+='<section class="panel"><div class="panel-head"><h2>Recent work to review</h2><a href="/dashboard/work">All work</a></div>'
+    content+='<section class="panel"><div class="panel-head"><h2>Unresolved exceptions</h2><a href="/dashboard/work">All work</a></div>'
     for task in summary['work']:
         content+='<div class="list-row"><span class="row-icon" aria-hidden="true">↗</span><a href="/dashboard/work/'+e(task['id'])+'"><h3>'+e(task['title'])+'</h3><p>'+e(when(task['updated_at'],zone))+'</p></a>'+badge(task['state'])+'</div>'
-    if not summary['work']:content+='<p class="small">No pending or unsuccessful work in this view.</p>'
-    content+='</section></div><aside class="stack"><section class="panel attention"><div class="attention-title"><span class="badge amber">Operating rule</span></div><h3>Appointment confirmation</h3><p>Decide which appointments need a call, when to call, and what Alli may agree to. No automatic confirmation calls are enabled.</p><div class="reason">The calendar records an appointment. A saved assignment authorizes future work.</div><a class="button-link" href="/dashboard/policies">Inspect operating rules →</a></section><section class="panel"><div class="panel-head"><h2>Latest AI check</h2><a href="/dashboard/health">Details</a></div>'
+    if not summary['work']:content+='<p class="small">No unresolved work exceptions in this view. Routine work runs without a review step.</p>'
+    content+='</section></div><aside class="stack"><section class="panel attention"><div class="attention-title"><span class="badge amber">Operating rule</span></div><h3>Appointment confirmation</h3><p>'+e(summary.get('appointment_policy',{}).get('reason','Calendar-to-call policy is not configured.'))+'</p><div class="reason">The calendar records an appointment. A saved assignment authorizes future work.</div><a class="button-link" href="/dashboard/policies">Inspect operating rules →</a></section><section class="panel"><div class="panel-head"><h2>Latest AI check</h2><a href="/dashboard/health">Details</a></div>'
     diagnostic=summary['diagnostic']
     if diagnostic:
         result=diagnostic['result']
-        state='AI checks passed' if result and result.get('ok') else 'Review saved result' if result else 'Unconfirmed attempt'
+        state='AI checks passed' if result and result.get('ok') else 'Inspect failure evidence' if result else 'Unconfirmed attempt'
         content+='<h3>'+e(state)+'</h3><p class="small">'+e(when(diagnostic['started_at'],zone))+'</p><p class="small">AI dependency checks. This does not prove carrier delivery or future availability.</p>'
         if release and diagnostic['release'] and release!=diagnostic['release']:
             content+='<p class="small">This saved check belongs to an earlier application release.</p>'
     else:content+='<h3>No saved check yet.</h3><p class="small">Opening this page does not run a paid probe or contact anyone.</p>'
-    return content+'</section></aside></div>'
+    return content+'</section></aside></div>'+coverage(summary.get('coverage'),zone)
 
 
 def policies(data, zone):
     content=title('The rules behind the work.','Saved business knowledge, its source, and the boundaries Alli works within.',zone)
-    content+='<section class="panel unconfigured"><div class="panel-head"><h2>Appointment confirmation</h2>'+badge('not configured')+'</div><p class="small">No calendar-to-call planner is enabled. No calls are activated by this page or by a saved example.</p><div class="draft-grid">'
-    for label,value in [('Applies to','Which calendars, appointments and attendees qualify?'),('When','Call lead time, timezone and permissible hours are not set.'),('Mission','Confirm attendance and answer questions using verified appointment details.'),('Boundaries','Voicemail, retries, exclusions and authority to change arrangements need a decision.')]:
-        content+='<div class="draft-item"><strong>'+e(label)+'</strong><p>'+e(value)+'</p></div>'
-    content+='</div><p class="prototype-note">These are open decisions, not an active policy. Ask Alli to draft a concrete rule for review.</p></section><h2 class="section-heading">Saved operating guidance</h2>'
+    policy=data['appointment_confirmation']
+    content+='<section class="panel"><div class="panel-head"><h2>Appointment confirmation</h2>'+badge(policy['state'])+'</div><p>'+e(policy['reason'])+'</p><p class="small">Rules are evaluated by background work. Opening this page does not contact anyone. Routine execution and verification belong to Alli.</p></section><h2 class="section-heading">Saved operating guidance</h2>'
     for row in data['records']:
         body=row['body']; label=body.get('rule_key') or body.get('title') or row['collection']
         content+='<article class="panel"><div class="panel-head"><div><p class="eyebrow">'+e(body.get('business') or row['collection'])+'</p><h2>'+e(str(label).replace('_',' '))+'</h2></div><span class="badge outline">Revision '+e(row['revision'])+'</span></div><p class="small">Saved '+e(when(row['updated_at'],zone))+'. Guidance is evaluated by delegated owner-authorized work; it does not schedule itself.</p>'+evidence('Read policy, source and supersession',body)+'<p class="source">Record '+e(row['id'])+' · '+e(row['collection'])+'</p></article>'
@@ -112,6 +110,8 @@ def relationship(data,zone):
         content+='<li><p>'+e(note['body'])+'</p><span class="evidence-label">Source '+e(source)+' · '+e(when(note['evidence_at'],zone))+'<br>Recorded '+e(when(note['created_at'],zone))+'</span></li>'
     content+='</ul>'
     if not data['notes']:content+='<p class="small">No sourced relationship notes yet. Relevant observations can be saved by delegated owner-authorized work.</p>'
+    if data.get('preparation'):
+        content+='<h3>Prepared relationship evidence</h3>'+evidence('Read preparation, sources and uncertainty',data['preparation'])
     if data['commitments']:
         content+='<h3>Open commitments</h3>'
         for row in data['commitments']:content+='<p class="small">'+e(row['kind'].upper())+' · '+e(when(row['due_at'],zone))+' '+badge(row['state'])+'</p>'
@@ -125,3 +125,21 @@ def call_history(calls,zone):
         if call['parent_task_id']:content+='<a class="text-link" href="/dashboard/work/'+e(call['parent_task_id'])+'">Read mission outcome →</a>'
         content+='</div>'+badge(call['state'])+'</div>'
     return content+('' if calls else '<p class="small">No saved calls in this view.</p>')+'</section>'
+
+
+def coverage(data,zone):
+    content='<section class="panel"><div class="panel-head"><h2>Calendar → expected commitments</h2></div>'
+    if not data:return content+'<p>No calendar coverage has been recorded. Expected appointment work is unconfirmed.</p></section>'
+    content+='<p class="small">Calendar checked '+e(when(data['checked_at'],zone))+'. Window ends '+e(when(data['window_end'],zone))+'. Reloading reads saved evidence.</p>'
+    from datetime import timedelta
+    stale=datetime.now(timezone.utc)-data['checked_at']>timedelta(hours=2)
+    if data['state']!='ok' or stale:content+='<p class="error">Coverage is stale or unavailable. '+e(data['reason'])+' Expected work may be missing.</p>'
+    for event in data['events']:
+        start=(event.get('start') or {}).get('dateTime')
+        content+='<div class="list-row"><span class="row-icon" aria-hidden="true">◷</span><div><h3>'+e(event.get('title','Calendar event'))+'</h3><p>'+e(when(start,zone) if start else 'All-day event')+' · '+e(event.get('attendee',''))+'</p><p>'+e(event.get('reason',''))+'</p>'
+        if event.get('due_at'):content+='<p class="small">Expected call '+e(when(event['due_at'],zone))+' · preparation '+e(event.get('preparation_state') or 'missing')+'</p>'
+        if event.get('schedule_id'):content+='<p class="source">Native schedule '+e(event['schedule_id'])+' · '+e(event.get('schedule_state',''))+'</p>'
+        if event.get('call_state'):content+='<p class="small">Call '+e(event['call_state'])+' · carrier '+e(event.get('carrier_status',''))+'. A carrier receipt does not prove attendance.</p>'
+        content+='</div>'+badge(event['state'])+'</div>'
+    if not data['events']:content+='<p>No eligible or excluded appointments were found in the recorded window.</p>'
+    return content+'</section>'

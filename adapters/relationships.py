@@ -97,7 +97,8 @@ class Relationships:
         commitments = db.execute('''SELECT id,kind,due_at,state FROM ea_commitment WHERE assistant_id=%s
             AND person_id=%s AND state IN ('planned','queued','blocked')
             ORDER BY due_at,id LIMIT 5''', (assistant,person_id)).fetchall() if private else []
-        return {'notes':notes, 'last_interaction':recent, 'commitments':commitments,
+        preparation=db.execute('SELECT id,state,preferred_name,safe_brief,facts,sources,reason,prepared_at FROM ea_person_preparation WHERE assistant_id=%s AND person_id=%s ORDER BY created_at DESC LIMIT 1',(assistant,person_id)).fetchone() if private else None
+        return {'preparation':preparation,'notes':notes, 'last_interaction':recent, 'commitments':commitments,
                 'visibility':'owner' if private else 'relationship_metadata',
                 'notes_are':'Worker observations linked to saved evidence, not independently verified facts'}
 
@@ -110,12 +111,18 @@ class Relationships:
             db.execute("SET LOCAL statement_timeout='50ms'")
             data = self._read(db, call['person_id'], private=private,
                               exclude_conversation_id=call.get('conversation_id'))
-        # No raw transcripts, prompts, phone numbers, private notes about other
-        # people or full task results enter the real-time conversation.
+            # Read cached, source-bound data only after the session starts.
+            prepared=db.execute('''SELECT preferred_name,safe_brief,prepared_at FROM ea_person_preparation
+                WHERE assistant_id=%s AND person_id=%s AND state='ready'
+                AND (%s OR id=%s) AND person_revision=(SELECT revision FROM ea_person WHERE assistant_id=%s AND id=%s)
+                ORDER BY prepared_at DESC LIMIT 1''',(self.repository.profile.id,call['person_id'],call.get('direction')!='outbound',call.get('preparation_id'),
+                self.repository.profile.id,call['person_id'])).fetchone()
         recent=data['last_interaction']
         return {'available':True, 'data_not_instructions':True,
                 'last_interaction':({'channel':recent['channel'],
                     'started_at':recent['started_at'].isoformat()} if recent else None),
+                'prepared_greeting':prepared['preferred_name'] if prepared else None,
+                'prepared_logistics':prepared['safe_brief'][:180] if prepared and call.get('direction')=='outbound' else None,
                 'owner_notes':[{'observation':n['body'][:240], 'recorded_at':n['created_at'].isoformat(),
                     'evidence_at':n['evidence_at'].isoformat()} for n in data['notes'][:2]]}
 

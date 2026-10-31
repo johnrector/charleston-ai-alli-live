@@ -102,7 +102,7 @@ class Scheduler:
             return [{**self.public(r),'recent_runs':[{k:v for k,v in run.items() if k not in {'schedule_id','n'}}
                 for run in runs if run['schedule_id']==r['id']]} for r in rows]
 
-    def prepare(self,actor,task_id,source_id,title,instruction,when):
+    def prepare(self,actor,task_id,source_id,title,instruction,when,internal_context=None):
         if not title.strip() or len(title)>180 or not instruction.strip() or len(instruction)>20000:
             raise InvalidInput('Supply a concise title and bounded work instruction')
         token=secrets.token_urlsafe(32)
@@ -130,11 +130,19 @@ class Scheduler:
                     (self.repository.profile.id,actor.person_id)).fetchone()
                 if counts['outstanding']>=self.repository.friend_active or counts['recent']>=self.repository.friend_daily:
                     raise PermissionDenied('The contact’s scheduled-work limit has been reached')
+            authority=dict(task['authority'])
+            if actor.allowed_tools is not None:
+                inherited=authority.get('allowed_tools')
+                authority['allowed_tools']=[t for t in actor.allowed_tools if inherited is None or t in inherited]
+            if internal_context:
+                if not owner or set(internal_context)-{'appointment_planner','appointment_id'}:
+                    raise PermissionDenied('Invalid internal schedule authority')
+                authority['internal_context']=internal_context
             row=db.execute('''INSERT INTO ea_schedule(id,assistant_id,person_id,source_task_id,source_id,
                 title,instruction,timing,authority,launch_digest,launch_sealed)
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *''',
                 (uuid4().hex,self.repository.profile.id,actor.person_id,task_id,source_id,title,instruction,
-                 Jsonb(when),Jsonb(task['authority']),hashlib.sha256(token.encode()).hexdigest(),
+                 Jsonb(when),Jsonb(authority),hashlib.sha256(token.encode()).hexdigest(),
                  self.cipher.encrypt(token.encode()).decode())).fetchone()
             self.repository._event(db,'schedule:'+row['id']+':intent','schedule.creating',
                 {'schedule_id':row['id'],'title':title,'timing':when},person_id=actor.person_id,task_id=task_id)
@@ -171,10 +179,10 @@ class Scheduler:
                 turn_id='schedule-saved',notify=False)
         return result
 
-    async def create(self,actor,task_id,source_id,title,instruction,run_at=None,expression=None,timezone_name=None):
+    async def create(self,actor,task_id,source_id,title,instruction,run_at=None,expression=None,timezone_name=None,*,internal_context=None):
         try:when=timing(run_at,expression,timezone_name or self.repository.profile.timezone)
         except ValueError as error:raise InvalidInput(str(error)) from error
-        row,fresh=await asyncio.to_thread(self.prepare,actor,task_id,source_id,title,instruction,when)
+        row,fresh=await asyncio.to_thread(self.prepare,actor,task_id,source_id,title,instruction,when,internal_context)
         if row['provider_id']:return {'ok':True,'schedule':self.public(row),'scheduled':True}
         if not fresh:
             # A lost create reply is recovered by identity, never blindly retried.
@@ -272,6 +280,7 @@ class Scheduler:
                 title=snapshot['title'],instruction=snapshot['instruction'],
                 context={'native_schedule_id':row['id'],'native_invocation_id':invocation['id'],
                          'schedule_revision':snapshot['revision'],'scheduled_at':invocation.get('scheduled_at'),
+                         **(row['authority'].get('internal_context',{}) if owner else {}),
                          **({'native_schedule_setup':True} if failed else {})})
             scheduled=invocation.get('scheduled_at')
             db.execute('''INSERT INTO ea_schedule_run(invocation_id,schedule_id,native_session_id,task_id,scheduled_at)

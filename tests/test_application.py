@@ -165,7 +165,10 @@ async def test_redesigned_dashboard_reads_saved_state_without_work_or_paid_probe
             assert all(page.status_code==200 for page in pages.values())
             assert 'No future work saved.' in pages['/dashboard'].text
             assert 'Appointment confirmation' in pages['/dashboard/policies'].text
-            assert 'No calendar-to-call planner is enabled' in pages['/dashboard/policies'].text
+            assert 'No active native calendar-to-call planner' in pages['/dashboard/policies'].text
+            assert 'Unresolved exceptions' in pages['/dashboard'].text
+            assert 'Calendar → expected commitments' in pages['/dashboard'].text
+            assert 'Recent work to review' not in pages['/dashboard'].text
             assert 'No saved diagnostic' in pages['/dashboard/health'].text
             assert 'No saved calls' in pages['/dashboard/promises'].text
             assert all('script-src' not in page.headers['Content-Security-Policy'] and

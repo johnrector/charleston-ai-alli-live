@@ -63,10 +63,13 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
     from adapters.scheduling import Scheduler
     scheduler=Scheduler(repository,api,settings.google_key,settings.base_url)
     relationships=Relationships(repository)
+    from adapters.people_workflow import PeopleWorkflow
+    people_workflow=PeopleWorkflow(repository,google,scheduler,calls)
+    calls.people_workflow=people_workflow
     worker=Worker(repository,runtime,outbox,carrier,settings.base_url,calls=calls,computer=computer,
-                  release=settings.release,scheduler=scheduler,text_conversation=TextConversation(repository,api))
+                  release=settings.release,scheduler=scheduler,people_workflow=people_workflow,text_conversation=TextConversation(repository,api))
     tools=tool_http_app(create_tool_server(repository,settings.base_url,
-        google=google,shopify=shopify,deliveries=outbox,calls=calls,carrier=carrier,computer=computer,connections=connections,scheduler=scheduler),settings.base_url)
+        google=google,shopify=shopify,deliveries=outbox,calls=calls,carrier=carrier,computer=computer,connections=connections,scheduler=scheduler,people_workflow=people_workflow),settings.base_url)
     oauth=OwnerOAuth(repository,settings.base_url,settings.session_secret,settings.google_key.encode())
     events=Events(repository,settings.google_key.encode(),settings.base_url)
     owner_tools=owner_http_app(create_owner_server(repository,calls,outbox,oauth,events,scheduler=scheduler,

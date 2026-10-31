@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 
 def friend_tools(*,scheduled=False):
-    base=('get_context','calendar_availability','calendar_events','book_meeting','call_person',
+    base=('get_context','prepare_interaction','calendar_availability','calendar_events','book_meeting','call_person',
           'end_phone_conversation','scheduled_work')
     return base if scheduled else (*base,'schedule_work','manage_scheduled_work')
 

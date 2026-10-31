@@ -413,3 +413,66 @@ CREATE TABLE IF NOT EXISTS ea_relationship_note (
 );
 CREATE INDEX IF NOT EXISTS ea_relationship_current ON ea_relationship_note(assistant_id,person_id,created_at DESC)
     WHERE superseded_by IS NULL;
+
+-- Additive source-backed preparation and event linkage. Native schedules own all clocks.
+CREATE TABLE IF NOT EXISTS ea_person_preparation (
+    id text PRIMARY KEY,
+    assistant_id text NOT NULL,
+    person_id uuid NOT NULL,
+    task_id text NOT NULL UNIQUE,
+    person_revision bigint NOT NULL,
+    conversation_id uuid,
+    event jsonb NOT NULL DEFAULT '{}',
+    mail_snapshot jsonb NOT NULL DEFAULT '{}',
+    state text NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','ready','blocked')),
+    safe_brief text NOT NULL DEFAULT '',
+    preferred_name text NOT NULL DEFAULT '',
+    name_source text NOT NULL DEFAULT '',
+    facts jsonb NOT NULL DEFAULT '[]',
+    sources jsonb NOT NULL DEFAULT '[]',
+    reason text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    prepared_at timestamptz,
+    FOREIGN KEY(assistant_id,person_id) REFERENCES ea_person(assistant_id,id),
+    FOREIGN KEY(assistant_id,task_id) REFERENCES ea_task(assistant_id,id),
+    FOREIGN KEY(assistant_id,conversation_id) REFERENCES ea_conversation(assistant_id,id)
+);
+CREATE INDEX IF NOT EXISTS ea_person_preparation_recent ON ea_person_preparation(assistant_id,person_id,prepared_at DESC);
+CREATE TABLE IF NOT EXISTS ea_preparation_waiter (
+    preparation_id text NOT NULL REFERENCES ea_person_preparation(id),
+    task_id text NOT NULL REFERENCES ea_task(id),
+    PRIMARY KEY(preparation_id,task_id)
+);
+CREATE TABLE IF NOT EXISTS ea_appointment_intent (
+    id text PRIMARY KEY,
+    assistant_id text NOT NULL,
+    person_id uuid NOT NULL,
+    event_id text NOT NULL,
+    event_revision text NOT NULL,
+    event jsonb NOT NULL,
+    due_at timestamptz NOT NULL,
+    policy_id uuid NOT NULL REFERENCES ea_record(id),
+    preparation_id text REFERENCES ea_person_preparation(id),
+    schedule_id text REFERENCES ea_schedule(id),
+    call_id text REFERENCES ea_phone_call(id),
+    catchup_authorized boolean NOT NULL DEFAULT false,
+    state text NOT NULL DEFAULT 'planned' CHECK(state IN ('planned','scheduled','catchup','held','attempted','cancelled')),
+    reason text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(assistant_id,event_id,person_id),
+    FOREIGN KEY(assistant_id,person_id) REFERENCES ea_person(assistant_id,id)
+);
+
+ALTER TABLE ea_phone_call ADD COLUMN IF NOT EXISTS preparation_id text REFERENCES ea_person_preparation(id);
+
+ALTER TABLE ea_preparation_waiter ADD COLUMN IF NOT EXISTS delivered boolean NOT NULL DEFAULT false;
+CREATE TABLE IF NOT EXISTS ea_calendar_coverage (
+    assistant_id text PRIMARY KEY REFERENCES ea_assistant(id),
+    checked_at timestamptz NOT NULL,
+    window_start timestamptz NOT NULL,
+    window_end timestamptz NOT NULL,
+    state text NOT NULL,
+    reason text NOT NULL DEFAULT '',
+    events jsonb NOT NULL DEFAULT '[]'
+);

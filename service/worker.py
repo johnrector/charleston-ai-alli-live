@@ -20,19 +20,21 @@ log=logging.getLogger(__name__)
 
 
 class Worker:
-    def __init__(self,repository,runtime,outbox,carrier,base_url,*,calls=None,computer=None,release='',scheduler=None,text_conversation=None):
+    def __init__(self,repository,runtime,outbox,carrier,base_url,*,calls=None,computer=None,release='',scheduler=None,text_conversation=None,people_workflow=None):
         self.repository,self.runtime,self.outbox,self.carrier=repository,runtime,outbox,carrier
         self.base_url=base_url.rstrip('/')
         self.calls=calls
         self.computer=computer
         self.release=release
         self.scheduler=scheduler
+        self.people_workflow=people_workflow
         self.text_conversation=text_conversation
         self.conversation_tasks={}
         self.stopping=asyncio.Event()
 
     async def dispatch(self,task):
         if task['context'].get('native_schedule_setup'):return
+        if task['context'].get('appointment_planner'):return
         if (self.text_conversation is not None and task['authority'].get('channel')=='sms'
                 and not task['context'].get('backend_only')):
             await self.text_conversation.handle(task)
@@ -54,6 +56,7 @@ class Worker:
         else:await self.runtime.dispatch(assignment,connection,execution)
 
     async def observe(self,task):
+        if task['context'].get('appointment_planner'):return
         if task['context'].get('native_schedule_setup'):return
         if task['context'].get('text_frontend'):return
         if not task['session_id']:
@@ -155,12 +158,33 @@ class Worker:
             if task['id'] not in self.conversation_tasks:
                 self.conversation_tasks[task['id']]=asyncio.create_task(self.text_conversation.handle(task))
 
-    async def transport_tick(self):
-        for _ in range(10):
-            if not await self.send_one():break
+    async def planner_tick(self):
+        task=await asyncio.to_thread(self.people_workflow.claim_planner)
+        if not task:return
+        actor=await asyncio.to_thread(self.repository.owner_actor,'native-planner:'+task['id'])
+        try:
+            result=await self.people_workflow.plan(actor,task['id'])
+        except Exception as error:
+            from datetime import datetime,timedelta,timezone
+            checked=datetime.now(timezone.utc)
+            await asyncio.to_thread(self.people_workflow.save_coverage,[],checked,checked+timedelta(days=8),state='unavailable',reason='Calendar/planner unavailable: '+type(error).__name__)
+            await asyncio.to_thread(self.repository.record_outcome,task['id'],'failed','Planner did not complete; saved coverage is stale.',turn_id='planner-failed',notify=False)
+            return
+        await asyncio.to_thread(self.repository.record_outcome,task['id'],'completed',json.dumps(result,default=str),turn_id='planner',notify=False)
+
+    async def maintenance_tick(self):
+        await asyncio.to_thread(self.people_workflow.deliver_preparation_waiters)
+        await asyncio.to_thread(self.people_workflow.refresh_conversations)
+
+    async def call_tick(self):
         if self.calls is not None:
             for _ in range(3):
                 if not await self.call_one():break
+
+    async def transport_tick(self,*,include_calls=True):
+        for _ in range(10):
+            if not await self.send_one():break
+        if include_calls:await self.call_tick()
         await self.forward_receipts()
         for task in await asyncio.to_thread(self.repository.reportable_tasks):
             try:
@@ -179,6 +203,18 @@ class Worker:
     async def call_one(self):
         call=await asyncio.to_thread(self.calls.claim)
         if not call:return False
+        if self.people_workflow is not None:
+            try:
+                permitted=await asyncio.to_thread(self.people_workflow.pre_dial,call)
+            except Exception as error:
+                permitted=False
+                log.warning('pre_dial call=%s held=%s',call['id'],type(error).__name__)
+            if permitted is None:
+                await asyncio.to_thread(self.calls.defer_before_dial,call['id'])
+                return False
+            if not permitted:
+                await asyncio.to_thread(self.calls.cancel_before_dial,call['id'],'Fresh appointment safety checks did not pass')
+                return True
         try:
             receipt=await self.carrier.dial(call['expected_to'],
                 answer_path='/transport/answer/'+call['id'],status_path='/transport/call-status/'+call['id'])
@@ -225,7 +261,10 @@ class Worker:
         if not await self.wait_for_public_release():return
         # A slow/blocked reasoning provider cannot delay an already scheduled
         # text, call intent or completion notification. Both use durable claims.
-        loops=[self._poll(self.work_tick,2),self._poll(self.transport_tick,1)]
+        loops=[self._poll(self.work_tick,2),self._poll(lambda:self.transport_tick(include_calls=False),1)]
+        if self.calls is not None:loops.append(self._poll(self.call_tick,1))
+        if self.people_workflow is not None:
+            loops.extend([self._poll(self.maintenance_tick,10),self._poll(self.planner_tick,2)])
         if self.scheduler is not None:loops.append(self._poll(self.scheduler.reconcile,30))
         if self.text_conversation is not None:loops.append(self._poll(self.conversation_tick,0.25))
         try:await asyncio.gather(*loops)

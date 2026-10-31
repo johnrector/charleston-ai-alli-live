@@ -1,45 +1,87 @@
-# Owner dashboard and relationship-context release
+# Alli diagnosis, people preparation and appointment workflow
 
-This release keeps GPT-Live as the conversational front end, durable client delegation as the work boundary, and OpenAI native Automations as the only future-work clock.
+GPT-Live remains the conversational layer. Client delegation preserves work after
+interruption/hangup; managed Agents do research and account work. OpenAI native
+Automations are the only appointment/planning clock. Existing Postgres holds CRM,
+policy, intent and actual delivery evidence; no new database, dependency, service,
+credentials or server permissions are introduced.
 
-## Behavior
+## Delivered behavior
 
-- Today shows upcoming saved commitments, pending/unconfirmed call attempts, recent work to review, and the latest cached AI diagnostic.
-- People retains the address book and per-person activity, and adds owner-private observations with their saved evidence and dates. The delegated-owner tools `relationship_context` and `remember_relationship` read/save notes; corrections preserve the source and earlier note. Friends gain no new tools or access.
-- Rules displays current operating-rule records from the existing collections, including source and revision. Appointment confirmation is explicitly **not configured**. There is no enable button, calendar scanner or automatic call activation.
-- Calls & work distinguishes the schedule state, each run's work outcome, actual carrier status and transcript finalization. Active schedules and pending commitments precede historical items, so old history cannot hide them behind the display limit.
-- Health reads the saved diagnostic. Visiting the dashboard never starts a paid probe, communication or delegated assignment.
-- Activity retains raw receipts under expandable details. Existing sign-in, CSRF, owner authorization, contact approval and connection routes remain intact. No JavaScript or new dependency was added.
+- Dashboard is for diagnosis and resolution. Upcoming commitments remain visible;
+  routine work does not require owner review. Calendar coverage shows the checked
+  window, expected work versus actual native schedule/preparation/call state,
+  excluded or blocked attendees and sourced reasons. Missing/unavailable/stale
+  coverage is explicit. Pages only read saved data.
+- Owner-authorized background preparation resolves saved identities, retrieves
+  real conversations/correspondence and researches relevant public professional
+  sources for unfamiliar people. Known relationships reuse evidence. Source-dated
+  facts/uncertainties and observations persist in the existing CRM; no identity
+  merges, approvals or sensitive inferences are authorized by these records.
+- Booking waits for preparation. Outbound call intents persist while preparation
+  runs and cannot dial until ready. Preferred nicknames require an explicit self
+  statement from that person's saved conversation or received email. Private
+  research stays owner-only; cached recipient-safe context is permission filtered.
+- An inspectable, explicitly enabled appointment policy creates one native hourly
+  planner, looking ahead eight days. Eligible appointments get one 11 a.m.
+  recipient-local call the day before; verified Charleston meeting context can
+  use America/New_York. Unknown identities/numbers/timezones, declined/tentative,
+  canceled, Hachiya, test/spam, self, other-organizer and unresolved first remote
+  meeting cases are excluded/blocked rather than guessed.
+- Missed setup slots become catch-up candidates, never immediate deployment calls.
+  A separately authorized catch-up must be daytime today, at least 15 minutes
+  ahead, for tomorrow's appointment. Each event/attendee retains one durable intent
+  across revisions and native invocations. Existing manual/conditional and recent
+  attempted confirmation evidence prevents duplication.
+- Pre-dial checks re-read the source event, endpoint/status, preparation binding,
+  mailbox/conversation freshness, policy, time window and prior receipts. An atomic
+  claim prevents another attempt. Cancellations persist a stop before modifying
+  the native schedule. Source changes after queueing hold the old call safely.
+- Calls use source-derived time/place and a bounded confirmation/questions mission;
+  brief voicemail, no automatic redial, financial terms, rescheduling or promises.
+  Native invocation completion, carrier status and actual dialogue remain separate.
 
-## GPT-Live path
+## Latency and persistence
 
-The optional relationship lookup starts **after** `session.started`, outside audio handling. It has an 80 ms application budget and a 50 ms SQL statement timeout, and failures are skipped. It returns compact metadata through a quiet `session.thinking.append`, capped at 480 UTF-8 bytes. Contact calls never receive owner-private notes; unverified calls receive no relationship brief. No model or external account query is added to voice startup.
+No web research/model work runs in Live startup or audio handling. The existing
+call read can select a cached evidenced greeting. Optional relationship context
+starts after session.started, with an 80 ms budget, 50 ms SQL timeout and 480-byte
+quiet thinking projection. Private owner notes do not enter contact conversations.
+Blocked-provider tests verify audio proceeds; they are not production latency
+benchmarks.
 
-The blocked-lookup test proves that Live starts and audio plays before the lookup completes. This is a behavioral test with a fake blocked provider, not a production latency benchmark. Real caller latency/audio remains a post-deployment validation gate.
+Research maintenance, planner work, general reasoning, call preflight and SMS have
+independent I/O loops. Planner execution leases recover interrupted native tasks;
+leases do not determine appointment times. Durable preparation waiters replay with
+stable identities and isolate canceled requesters. Additive migrations are
+repeatable, with no destructive backfill/down-migration; old code can ignore the
+new CRM/preparation/intent/coverage records.
 
-## Data and rollout
+## Validation and deployment
 
-`ea_relationship_note` is one additive, initially empty table in the existing database. Composite foreign keys bind it to the same assistant/person and actual task/conversation evidence. There is no backfill, contact approval change, new database or new account access. Startup initialization is repeatable. Rolling back application code can leave this unused table in place; no destructive down-migration is required.
+The first dashboard/context release is production commit
+63329f010701e6d35b51f7f48e255e343adf69ff, verified live October 31 at 15:51 UTC.
+The active Python Render service is srv-dasnm0vpn0mc7397ejg0. The separate legacy
+service build failure is not an active-service outage.
 
-Notes are observations, not automatically verified facts. Owner-authorized workers can save them after substantial work; this release does not run a new transcript-mining agent or import old personal data. A full autonomous CRM-maintenance workflow and structured calendar-to-call planning remain follow-on decisions.
+The workflow release has explicit user deployment/configuration authorization.
+Independent read-only review found no remaining confirmed deployment blocker.
+The final regression run passed 227 tests before the source-derived mission and
+coverage layout finishing edits; the final workflow/application/worker checks also passed 40 tests after those
+finishing edits. Tests use disposable local Postgres, authenticated MCP HTTP and fake
+Google/native/carrier providers. They cover DST, restart/single-connection pooling,
+permission isolation, nickname sources, pending booking/call continuation,
+waiter replay, manual deduplication, source revisions, cancellations and fresh
+pre-dial holds. Dashboard views were visually inspected with fictional records.
 
-The full regression run exposed a pre-existing concurrent daily-diagnostic claim race between its day and request-ID unique indexes. `ON CONFLICT DO NOTHING` now handles either index, preserving the existing once-per-day claim and uncertain-outcome behavior. No extra diagnostic is scheduled.
-
-## Verification
-
-- Baseline: 190 tests passed with a disposable local Postgres cluster.
-- Release: **204 tests passed** in the full regression suite, including real Postgres/MCP HTTP, permissions, source validation, correction/idempotency, restart-safe migration, HTML escaping, cached health reads and visibility after 210 historical schedules.
-- Local visual review uses actual rendered routes with fictional records only. Desktop and 390 px phone layouts were checked; tested phone pages had no horizontal overflow. The loopback preview is separate from the application checkout.
-- No production API calls, records, credentials, permission changes or deployment were performed by this implementation.
+After pushing, verify exact Render/public release, authenticated dashboard, saved
+policies, native planner and actual preparation/schedule receipts. Never use an
+appointment call as a smoke test. The once-daily diagnostic claim and schedule
+remain unchanged. Production contact/call receipt IDs belong in the private
+handoff, not committed seeds.
 
 ## Official design references
 
 - https://developers.openai.com/api/docs/guides/live-delegation
 - https://developers.openai.com/api/docs/guides/agents-api/sessions/automations
 - https://developers.openai.com/api/docs/guides/agents-api/sessions/events
-
-## Release boundary
-
-Code and offline validation only. Do not push this branch to auto-deploying main without the parent's explicit deployment authorization. Following deployment, verify the release identity, existing owner login, the real schedule listing, cached health result and one separately authorized voice smoke test. Do not create appointment calls as a smoke test.
-
-Independent review found no high-priority blockers. Its two nonblocking findings were corrected: the voice projection now excludes the current conversation when retrieving previous interaction context, and cached diagnostics visibly identify their recorded release, including an earlier-release notice. Targeted follow-up and the full 204-test regression suite passed.

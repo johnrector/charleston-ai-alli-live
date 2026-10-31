@@ -177,3 +177,27 @@ async def test_replacement_worker_waits_for_its_public_mcp_release(worker_setup,
     finally:
         worker.stopping.set()
         await asyncio.wait_for(running,3)
+
+
+@pytest.mark.asyncio
+async def test_background_people_research_and_pre_dial_check_cannot_delay_sms(worker_setup):
+    import asyncio
+    from types import SimpleNamespace
+    repo,owner,task,outbox,carrier,runtime,make_worker=worker_setup
+    outbox.queue_text(task['id'],owner.person_id,'Independent authorized result.','independent-delivery')
+    worker=make_worker()
+    started,release,sent=asyncio.Event(),asyncio.Event(),asyncio.Event()
+    async def blocked():started.set();await release.wait()
+    async def send(*args,**kwargs):sent.set();return {'message_sid':'SM-independent'}
+    carrier.send.side_effect=send
+    worker.calls=SimpleNamespace() # run() starts its separate call I/O loop.
+    worker.people_workflow=SimpleNamespace()
+    worker.call_tick=blocked;worker.maintenance_tick=blocked;worker.planner_tick=blocked
+    running=asyncio.create_task(worker.run())
+    try:
+        await asyncio.wait_for(started.wait(),2)
+        await asyncio.wait_for(sent.wait(),3)
+        assert not release.is_set() and carrier.send.await_count==1
+    finally:
+        worker.stopping.set();release.set()
+        await asyncio.wait_for(running,3)

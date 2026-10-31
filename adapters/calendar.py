@@ -8,9 +8,10 @@ from .google import InvalidInput,timestamp
 
 
 class CalendarService:
-    def __init__(self,repository,google,*,friend_daily_bookings=3,friend_max_minutes=120):
+    def __init__(self,repository,google,*,friend_daily_bookings=3,friend_max_minutes=120,people_workflow=None):
         self.repository,self.google=repository,google
         self.daily,self.maximum=friend_daily_bookings,friend_max_minutes
+        self.people_workflow=people_workflow
 
     def lookup(self,task_id,start,end,*,page_token=None):
         with self.repository.connection() as db:
@@ -25,8 +26,25 @@ class CalendarService:
             person_id=None if task['scope']=='owner' else str(task['person_id']),
             contact_email=person['email'] if task['scope']=='friend' else '')
 
+    def prepare_booking(self,task_id,invitation_email):
+        if self.people_workflow is not None and self.people_workflow.policy('people_preparation_v1'):
+            task=self.repository.task_result(task_id)
+            with self.repository.connection() as db:
+                person=db.execute('SELECT id,email,kind FROM ea_person WHERE assistant_id=%s AND id=%s',
+                    (self.repository.profile.id,task['person_id'])).fetchone()
+                email=task['authority'].get('invitation_email') or invitation_email or person['email']
+                targets=db.execute("SELECT id FROM ea_person WHERE assistant_id=%s AND lower(email)=%s AND kind='contact' AND status NOT IN ('suspended','deleted')",
+                    (self.repository.profile.id,email.casefold())).fetchall() if email else []
+            if email and (len(targets)!=1):raise InvalidInput('Resolve and save the invitee identity before booking')
+            if targets:
+                prep=self.people_workflow.queue_allowed(task_id,str(targets[0]['id']))
+                return prep
+        return None
+
     def book(self,task_id,*,action_key,title,start,end,description='',location='',invitation_email=''):
         begin,finish=timestamp(start),timestamp(end)
+        prep=self.prepare_booking(task_id,invitation_email)
+        if prep and prep['state']!='ready':raise InvalidInput('People preparation pending; wait for saved evidence before booking')
         with self.repository.connection() as db:
             lock=int.from_bytes(hashlib.sha256(('calendar:'+self.repository.profile.id).encode()).digest()[:8],
                                 'big',signed=True)
