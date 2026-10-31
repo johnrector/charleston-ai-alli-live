@@ -375,3 +375,16 @@ CREATE TABLE IF NOT EXISTS ea_account_secret (
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY(assistant_id,provider)
 );
+
+-- One owner-invoked diagnostic per local day, including uncertain attempts.
+CREATE TABLE IF NOT EXISTS ea_diagnostic_run (
+    assistant_id text NOT NULL REFERENCES ea_assistant(id),
+    check_date date NOT NULL,
+    request_id text NOT NULL,
+    release text NOT NULL,
+    started_at timestamptz NOT NULL DEFAULT now(),
+    finished_at timestamptz,
+    result jsonb,
+    PRIMARY KEY(assistant_id,check_date),
+    UNIQUE(assistant_id,request_id)
+);

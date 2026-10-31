@@ -18,7 +18,7 @@ from .owner_oauth import SCOPE
 from .sms import validate as validate_sms
 
 
-def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=None):
+def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=None,diagnostics=None):
     server=MCPServer(repository.profile.name+' executive assistant',version='2.0.0',
         instructions='Alli is the principal\'s personal executive assistant. Delegate authorized work with a stable request ID. '
         'Work persists after phone calls and runs in the cloud. Use call_outbound for actual phone conversations, '
@@ -36,6 +36,11 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
         if not token or token.subject!='alli-owner' or not token.claims:
             raise PermissionDenied('Owner authorization is required')
         return await asyncio.to_thread(repository.owner_actor,token.claims['proof_id'])
+
+    if diagnostics is not None:
+        @server.tool(structured_output=True,description='Run the owner-authorized daily AI dependency diagnostic. Use daily-health:YYYY-MM-DD in America/New_York. At most one attempt per local day, including failed/uncertain attempts; repeated calls read its saved result. Opens a silent Live session, makes one tiny no-tool text request, and reads an existing Agents session. Never calls, texts, emails or dispatches work. This does not test telephone carrier delivery.')
+        async def check_service_health(request_id:str) -> dict[str,Any]:
+            return await diagnostics.run(await actor(),request_id)
 
     async def recipient(owner,phone,name,email=''):
         phone=repository.normalize_phone(phone)

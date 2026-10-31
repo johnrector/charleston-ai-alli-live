@@ -20,6 +20,7 @@ from adapters.computer import Computer
 from adapters.account_connections import AccountConnections
 from adapters.shopify import ShopifyAccount
 from adapters.text_conversation import TextConversation
+from adapters.diagnostics import ServiceDiagnostics
 from adapters.bootstrap import seed_existing_records,preserve_birthday
 from adapters.telephony import MediaChannel
 from alli_core.authority import Actor,Conflict,PermissionDenied
@@ -66,7 +67,8 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
         google=google,shopify=shopify,deliveries=outbox,calls=calls,carrier=carrier,computer=computer,connections=connections,scheduler=scheduler),settings.base_url)
     oauth=OwnerOAuth(repository,settings.base_url,settings.session_secret,settings.google_key.encode())
     events=Events(repository,settings.google_key.encode(),settings.base_url)
-    owner_tools=owner_http_app(create_owner_server(repository,calls,outbox,oauth,events,scheduler=scheduler),settings.base_url)
+    owner_tools=owner_http_app(create_owner_server(repository,calls,outbox,oauth,events,scheduler=scheduler,
+        diagnostics=ServiceDiagnostics(repository,api,settings.release)),settings.base_url)
     background=set()
 
     def spawn(coroutine):

@@ -36,3 +36,21 @@ the executor.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for boundaries and verified OpenAI sources,
 and [DEVELOPMENT.md](DEVELOPMENT.md) for the current release evidence and limits.
+
+## Owner daily diagnostic
+
+The owner-only MCP tool `check_service_health(request_id)` accepts
+`daily-health:YYYY-MM-DD`, using the current date in `America/New_York`.
+It runs only when invoked: there is no timer, startup probe or conversation gate.
+One durable claim per local day prevents additional attempts after failure,
+timeout, interruption or a changed request ID. Repeating the same ID reads the
+saved result; an interrupted attempt returns `uncertain` rather than restarting.
+Previous dates can be read but cannot start new probes. The external owner
+automation is responsible for the single 3 a.m. Eastern invocation.
+
+The check opens/closes a silent Live session, makes one no-tool Responses request
+(maximum 256 output tokens, high reasoning), and reads an existing owner Agents
+session. It uses existing credentials with retries disabled and bounded timeouts.
+No normal work task, notification, call, SMS, email or business action is created.
+Agents access is read-only, not a new work-dispatch test. Results do not establish
+telephone-carrier delivery, private-account tool health or future availability.
