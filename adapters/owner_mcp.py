@@ -127,7 +127,7 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
         task=await asyncio.to_thread(repository.submit,restricted,source_id='dot-call-task:'+request_id,
             title='Call '+recipient_name,instruction='Report the actual result of this authorized call. Mission: '+instruction)
         call=await asyncio.to_thread(calls.queue,task['id'],str(person['id']),instruction,'dot-call:'+request_id,
-            allowed_tools=allowed,invitation_email=email)
+            allowed_tools=allowed,invitation_email=email,voicemail_policy=voicemail_policy)
         return to_jsonable_python({'ok':True,'request_id':request_id,'status':call['state'],'call_id':call['id'],
                                    'note':'Saved for dialing; no answer or conversation is confirmed yet.'})
 
@@ -148,6 +148,7 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
             'call_id':call['id'],'source_id':call['source_id'],'conversation_id':str(call['conversation_id']),
             'parent_task_id':call['parent_task_id'],'live_errors':await asyncio.to_thread(calls.errors,call['id']),
             'context_updates':await asyncio.to_thread(calls.context_updates,call['id']),
+            'voicemail_evidence':await asyncio.to_thread(calls.voicemail_evidence,call['id']),
             'duration_seconds':call['duration_seconds'],'transcript':call['transcript'],
             'transcript_finalized':call['finalized'],'conversation_report':task['result'] if task else '',
             'confirmed_by_carrier_status':False})

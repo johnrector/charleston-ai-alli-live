@@ -476,3 +476,26 @@ CREATE TABLE IF NOT EXISTS ea_calendar_coverage (
     reason text NOT NULL DEFAULT '',
     events jsonb NOT NULL DEFAULT '[]'
 );
+
+-- One finite voicemail asset/attempt per existing call; no independent clock.
+CREATE UNIQUE INDEX IF NOT EXISTS ea_phone_call_assistant_id ON ea_phone_call(assistant_id,id);
+CREATE TABLE IF NOT EXISTS ea_call_voicemail (
+    call_id text PRIMARY KEY,
+    assistant_id text NOT NULL,
+    policy text NOT NULL DEFAULT 'generic_message' CHECK(policy IN ('generic_message','hang_up')),
+    asset_state text NOT NULL DEFAULT 'rendering' CHECK(asset_state IN ('rendering','ready','unavailable')),
+    body text NOT NULL DEFAULT '',
+    audio bytea,
+    audio_digest text NOT NULL DEFAULT '',
+    detector_state text NOT NULL DEFAULT 'unknown',
+    state text NOT NULL DEFAULT 'armed',
+    reason text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY(assistant_id,call_id) REFERENCES ea_phone_call(assistant_id,id)
+);
+ALTER TABLE ea_phone_call ADD COLUMN IF NOT EXISTS voicemail_policy text NOT NULL DEFAULT 'generic_message';
+ALTER TABLE ea_call_voicemail ADD COLUMN IF NOT EXISTS playback_state text NOT NULL DEFAULT 'not_started';
+ALTER TABLE ea_call_voicemail ADD COLUMN IF NOT EXISTS hangup_state text NOT NULL DEFAULT 'not_requested';
+ALTER TABLE ea_call_voicemail ADD COLUMN IF NOT EXISTS played_at timestamptz;
+ALTER TABLE ea_call_voicemail ADD COLUMN IF NOT EXISTS detector_provider_id text;

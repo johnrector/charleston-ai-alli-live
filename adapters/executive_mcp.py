@@ -274,18 +274,28 @@ def create_tool_server(repository, base_url, *, google=None,shopify=None,deliver
             @server.tool(structured_output=True,description='End only the active phone conversation associated with this task when the conversation is finished or the caller asks to hang up. OpenAI chooses when; the carrier only executes the command. Other delegated work continues.')
             async def end_phone_conversation() -> dict[str,Any]:
                 _,task_id=principal()
+                if not await asyncio.to_thread(repository.permitted,task_id,writes=True):
+                    raise PermissionDenied('Assignment cannot end a call')
+                call=await asyncio.to_thread(calls.current_for_task,task_id)
+                voicemail=getattr(calls,'voicemail',None)
+                # A temporary no-attempt hold is outside the permanent write gate.
+                # Its atomic reservation also prevents finite playback starting in
+                # the gap before the end action is claimed. Actual end attempts
+                # still use the original durable once-only action receipt.
+                if voicemail is not None and not await voicemail.reserve_delegated_end(call['id']):
+                    return {'ok':False,'not_attempted':True,'reason':'Application owns voicemail playback and hangup; use its saved receipt. No early end or retry.'}
                 async def end(actor):
-                    call=await asyncio.to_thread(calls.current_for_task,task_id)
-                    return await carrier.end(call['provider_id'])
+                    current=await asyncio.to_thread(calls.current_for_task,task_id)
+                    return await carrier.end(current['provider_id'])
                 return await operation('end_phone_conversation',{},end,writes=True,owner_only=False,transactional=False)
 
         @server.tool(structured_output=True,description='Place one mission-driven call through Alli and return the saved call intent. Wait for actual conversation evidence before claiming an answer. Owners may call saved people; friends may request a callback only to themselves. No automatic redial.')
-        async def call_person(person_id:str,mission:str) -> dict[str,Any]:
-            arguments=dict(person_id=person_id,mission=mission)
+        async def call_person(person_id:str,mission:str,voicemail_policy:Literal['generic_message','hang_up']='generic_message') -> dict[str,Any]:
+            arguments=dict(person_id=person_id,mission=mission,voicemail_policy=voicemail_policy)
             key=action_key('call_person',arguments)
             _,task_id=principal()
-            def queue(actor,person_id,mission):
-                return calls.queue(task_id,person_id,mission,key)
+            def queue(actor,person_id,mission,voicemail_policy):
+                return calls.queue(task_id,person_id,mission,key,voicemail_policy=voicemail_policy)
             return await operation('call_person',arguments,queue,writes=True,owner_only=False)
 
     if shopify is not None:

@@ -1,5 +1,7 @@
 """Phone transport only: signed callbacks, G.711 media, calls and messages."""
 import asyncio
+import base64
+from uuid import uuid4
 from urllib.parse import urlsplit, urlunsplit
 
 from starlette.websockets import WebSocketDisconnect
@@ -33,15 +35,18 @@ class Carrier:
         response.connect().stream(url=self.public_url(media_path,websocket=True))
         return str(response)
 
-    async def dial(self,to,*,answer_path,status_path):
+    async def dial(self,to,*,answer_path,status_path,voicemail_path=None):
         if to == self.phone:
             raise ValueError('The assistant cannot call her own service number')
-        # OpenAI handles the conversation, screening and voicemail. No AMD,
-        # ConversationRelay, Twilio speech, or provider-side conversational agent.
+        # Acoustic readiness runs asynchronously, so a human connects to Live
+        # immediately. It does not authorize a message or act as a voice agent.
+        detection=({'machine_detection':'DetectMessageEnd','async_amd':'true',
+            'async_amd_status_callback':self.public_url(voicemail_path),
+            'async_amd_status_callback_method':'POST'} if voicemail_path else {})
         call=await asyncio.to_thread(self.client.calls.create,to=to,from_=self.phone,
             url=self.public_url(answer_path),method='POST',timeout=60,
             status_callback=self.public_url(status_path),status_callback_method='POST',
-            status_callback_event=['initiated','ringing','answered','completed'])
+            status_callback_event=['initiated','ringing','answered','completed'],**detection)
         return {'ok':True,'provider':'twilio','call_sid':call.sid,
                 'status':call.status,'to':call.to,'from':call._from}
 
@@ -76,6 +81,50 @@ class MediaChannel:
         self.socket,self.account_sid,self.call_sid=websocket,account_sid,call_sid
         self.stream_sid=None
         self.closed=False
+        self.output_lock=asyncio.Lock()
+        self.playback_epoch=0
+        self.marks={}
+        self.on_inbound_audio=None
+        self.allow_live_output=None
+
+    def cancel_marks(self):
+        self.playback_epoch+=1
+        for _,future in self.marks.values():
+            if not future.done():future.set_result(False)
+        self.marks.clear()
+
+    async def clear(self):
+        async with self.output_lock:
+            self.cancel_marks()
+            if not self.closed and self.stream_sid:
+                await self.socket.send_json({'event':'clear','streamSid':self.stream_sid})
+
+    async def play_finite(self,audio,*,permitted=lambda:True):
+        if not isinstance(audio,bytes) or not audio:return False
+        async with self.output_lock:
+            if self.closed or not self.stream_sid or not permitted():return False
+            self.cancel_marks()
+            await self.socket.send_json({'event':'clear','streamSid':self.stream_sid})
+            name='voicemail_'+uuid4().hex
+            future=asyncio.get_running_loop().create_future()
+            self.marks[name]=(self.playback_epoch,future)
+            try:
+                for offset in range(0,len(audio),4000):
+                    if not permitted():self.cancel_marks();return False
+                    await self.socket.send_json({'event':'media','streamSid':self.stream_sid,
+                        'media':{'payload':base64.b64encode(audio[offset:offset+4000]).decode()}})
+                if not permitted():self.cancel_marks();return False
+                await self.socket.send_json({'event':'mark','streamSid':self.stream_sid,'mark':{'name':name}})
+            except Exception:
+                self.cancel_marks();raise
+        # This is a media-sized transport deadline, not a silence/hangup timer.
+        # Timeout is never treated as played and never authorizes hangup.
+        try:
+            return await asyncio.wait_for(asyncio.shield(future),len(audio)/8000+10)
+        except asyncio.TimeoutError:
+            self.marks.pop(name,None)
+            if not future.done():future.set_result(False)
+            return False
 
     async def handshake(self):
         async with asyncio.timeout(10):
@@ -102,7 +151,13 @@ class MediaChannel:
                 if event.get('streamSid') not in {None,self.stream_sid}:
                     raise ValueError('Media stream mismatch')
                 if event.get('event')=='stop':
-                    return
+                    self.cancel_marks();return
+                if event.get('event')=='mark':
+                    item=self.marks.pop(event.get('mark',{}).get('name'),None)
+                    if item:
+                        epoch,future=item
+                        if not future.done():future.set_result(epoch==self.playback_epoch and not self.closed)
+                    continue
                 if event.get('event')=='media':
                     media=event['media']
                     if media.get('track') not in {None,'inbound'}:
@@ -110,21 +165,26 @@ class MediaChannel:
                     payload=media['payload']
                     if not isinstance(payload,str) or len(payload)>65536:
                         raise ValueError('Invalid audio packet')
+                    if self.on_inbound_audio is not None:
+                        await self.on_inbound_audio(payload)
                     yield payload
         except WebSocketDisconnect:
-            return
+            self.cancel_marks();return
 
     async def play(self,base64_audio):
         if self.closed:
             return
         if not self.stream_sid:
             raise ValueError('Media handshake required')
-        await self.socket.send_json({'event':'media','streamSid':self.stream_sid,
-                                     'media':{'payload':base64_audio}})
+        async with self.output_lock:
+            if not self.closed and (self.allow_live_output is None or self.allow_live_output()):
+                await self.socket.send_json({'event':'media','streamSid':self.stream_sid,
+                                             'media':{'payload':base64_audio}})
 
     async def close(self):
         if not self.closed:
             self.closed=True
+            self.cancel_marks()
             try:
                 await self.socket.close()
             except (RuntimeError,WebSocketDisconnect):

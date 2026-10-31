@@ -20,7 +20,7 @@ log=logging.getLogger(__name__)
 
 
 class Worker:
-    def __init__(self,repository,runtime,outbox,carrier,base_url,*,calls=None,computer=None,release='',scheduler=None,text_conversation=None,people_workflow=None):
+    def __init__(self,repository,runtime,outbox,carrier,base_url,*,calls=None,computer=None,release='',scheduler=None,text_conversation=None,people_workflow=None,voicemail=None):
         self.repository,self.runtime,self.outbox,self.carrier=repository,runtime,outbox,carrier
         self.base_url=base_url.rstrip('/')
         self.calls=calls
@@ -28,6 +28,7 @@ class Worker:
         self.release=release
         self.scheduler=scheduler
         self.people_workflow=people_workflow
+        self.voicemail=voicemail
         self.text_conversation=text_conversation
         self.conversation_tasks={}
         self.stopping=asyncio.Event()
@@ -203,6 +204,19 @@ class Worker:
     async def call_one(self):
         call=await asyncio.to_thread(self.calls.claim)
         if not call:return False
+        if self.voicemail is not None:
+            # Preparation happens before the final source checks, never on Live startup.
+            try:asset=await self.voicemail.prepare(call)
+            except Exception as error:
+                asset=None
+                log.warning('voicemail preparation call=%s error=%s',call['id'],type(error).__name__)
+            if not asset or asset['asset_state']!='ready':
+                if self.people_workflow is not None:
+                    task=await asyncio.to_thread(self.repository.task_result,call['parent_task_id'])
+                    identifier=task['context'].get('appointment_id') if task else None
+                    if identifier:await asyncio.to_thread(self.people_workflow.hold,identifier,'Finite voicemail preparation unavailable; call not placed')
+                await asyncio.to_thread(self.calls.cancel_before_dial,call['id'],'Finite voicemail preparation unavailable; no dial or automatic retry')
+                return True
         if self.people_workflow is not None:
             try:
                 permitted=await asyncio.to_thread(self.people_workflow.pre_dial,call)
@@ -216,8 +230,9 @@ class Worker:
                 await asyncio.to_thread(self.calls.cancel_before_dial,call['id'],'Fresh appointment safety checks did not pass')
                 return True
         try:
+            options={'voicemail_path':'/transport/amd/'+call['id']} if self.voicemail is not None else {}
             receipt=await self.carrier.dial(call['expected_to'],
-                answer_path='/transport/answer/'+call['id'],status_path='/transport/call-status/'+call['id'])
+                answer_path='/transport/answer/'+call['id'],status_path='/transport/call-status/'+call['id'],**options)
         except Exception as error:
             await asyncio.to_thread(self.calls.uncertain,call['id'],type(error).__name__)
             return True
@@ -231,10 +246,13 @@ class Worker:
                 evidence={key:call[key] for key in ('id','state','carrier_status','duration_seconds','finalized')}
                 # Raw dialogue stays in get_context, bounded separately. A carrier
                 # status or answering-machine guess cannot supply a human answer.
+                evidence['voicemail_evidence']=await asyncio.to_thread(self.calls.voicemail_evidence,call['id'])
                 text=('Phone transport/conversation evidence for your existing mission, not a new authorization: '+
                     json.dumps(evidence,default=str)+
                     '\nRead get_context for the actual call dialogue. Determine what the person actually said '
                     'and finish the original assignment. No transcript means no confirmed conversation. '
+                    'Finite voicemail has its own saved text and playback/hangup receipt, outside Live output transcript. '
+                    'A playback acknowledgment is not proof of voicemail storage or attendance. '
                     'Do not redial or claim a meeting was confirmed from a carrier status alone.')
                 await asyncio.to_thread(self.repository.stage_input,call['parent_task_id'],
                     'call:'+call['id']+':'+call['state']+(':final' if call['finalized'] else ':provisional'),text,role='developer')

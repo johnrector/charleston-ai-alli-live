@@ -252,3 +252,28 @@ async def test_unattributed_context_error_is_retained_without_guessing_command_o
     details=hooks.error_details[0]
     assert hooks.errors==['context_injection_incomplete'] and 'context_command' not in details
     assert not details['session_ending'] and 'does not establish failure or success' in details['communication_delivery']
+
+
+@pytest.mark.asyncio
+async def test_optional_voicemail_start_never_holds_live_audio_and_suppressed_text_is_labeled():
+    from unittest.mock import AsyncMock
+    blocked=asyncio.Event()
+    async def start():await blocked.wait()
+    control=NS(start=start,suppress_live=False,live_output=lambda:None,
+        transcript_event=lambda *args:None,close=AsyncMock())
+    live,connection,channel,hooks,background,instructions=create(lambda *args:None)
+    live.voicemail_control=control
+    run=asyncio.create_task(live.run(instructions=instructions,context={'application_managed_voicemail':True}))
+    await asyncio.wait_for(live.started.wait(),1)
+    await connection.events.put(NS(type='session.output_audio.delta',delta='human-fast-path'))
+    await asyncio.wait_for(channel.playing.wait(),1)
+    assert channel.played==['human-fast-path'] and not blocked.is_set()
+    control.suppress_live=True
+    await connection.events.put(NS(type='session.output_audio.delta',delta='machine-output-dropped'))
+    await connection.events.put(NS(type='session.output_transcript.delta',delta='Checking.',start_ms=1,end_ms=2))
+    await channel.incoming.put(None);await asyncio.wait_for(run,1)
+    assert channel.played==['human-fast-path']
+    assert hooks.finished[0][0][-1]['delivery']=='unverified_transcript_while_application_output_suppressed'
+    control.close.assert_awaited_once()
+    blocked.set();await asyncio.gather(*background)
+    assert 'application owns the finite voicemail' in connection.configuration['input'][0]['content'][0]['text']
