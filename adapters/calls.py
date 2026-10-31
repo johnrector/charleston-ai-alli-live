@@ -56,10 +56,7 @@ class CallRepository:
                 {'call_id':identifier,'number_verified':verified},person_id=person['id'])
             return row
 
-    def queue(self,task_id,person_id,instruction,source_id,*,allowed_tools=None,invitation_email='',voicemail_policy='generic_message',voicemail_message='',suppress_notifications=False):
-        if (not isinstance(voicemail_message,str) or len(voicemail_message)>800 or any(ord(x)<32 for x in voicemail_message)
-                or type(suppress_notifications) is not bool):raise ValueError('Supply bounded explicit voicemail options')
-        if voicemail_policy not in {'generic_message','hang_up'}:raise ValueError('Unknown voicemail policy')
+    def queue(self,task_id,person_id,instruction,source_id,*,allowed_tools=None,invitation_email=''):
         if not isinstance(instruction,str) or not 1<=len(instruction)<=12000:
             raise ValueError('Supply a concise call mission')
         workflow=getattr(self,'people_workflow',None)
@@ -101,11 +98,11 @@ class CallRepository:
                 VALUES(%s,%s,%s,'phone',%s) RETURNING id''',
                 (self.assistant_id,person_id,'outbound:'+identifier,scope)).fetchone()
             row=db.execute('''INSERT INTO ea_phone_call(id,assistant_id,conversation_id,person_id,parent_task_id,
-                source_id,direction,instruction,expected_from,expected_to,state,allowed_tools,invitation_email,voicemail_policy,voicemail_message,suppress_notifications)
-                VALUES(%s,%s,%s,%s,%s,%s,'outbound',%s,%s,%s,'queued',%s,%s,%s,%s,%s) RETURNING *''',
+                source_id,direction,instruction,expected_from,expected_to,state,allowed_tools,invitation_email)
+                VALUES(%s,%s,%s,%s,%s,%s,'outbound',%s,%s,%s,'queued',%s,%s) RETURNING *''',
                 (identifier,self.assistant_id,conversation['id'],person_id,task_id,source_id,
                  instruction,self.phone,recipient['address'],Jsonb(list(allowed_tools)) if allowed_tools is not None else None,
-                 invitation_email,voicemail_policy,voicemail_message,suppress_notifications)).fetchone()
+                 invitation_email)).fetchone()
             if prepared and prepared.get('id'):
                 row=db.execute('UPDATE ea_phone_call SET preparation_id=%s WHERE id=%s RETURNING *',(prepared['id'],identifier)).fetchone()
             db.execute('''UPDATE ea_task SET context=jsonb_set(context,'{pending_calls}',
@@ -124,24 +121,6 @@ class CallRepository:
                 p.kind AS person_kind FROM ea_phone_call c JOIN ea_conversation v ON v.id=c.conversation_id
                 JOIN ea_person p ON p.id=c.person_id WHERE c.assistant_id=%s AND c.id=%s''',
                 (self.assistant_id,identifier)).fetchone()
-
-    def save_media_evidence(self,identifier,evidence):
-        with self.repository.connection() as db:
-            call=db.execute('SELECT * FROM ea_phone_call WHERE assistant_id=%s AND id=%s',(self.assistant_id,identifier)).fetchone()
-            if call:self.repository._event(db,'call:'+identifier+':media-evidence','call.media_evidence',
-                {'call_id':identifier,**evidence},person_id=call['person_id'],task_id=call['parent_task_id'])
-
-    def media_evidence(self,identifier):
-        with self.repository.connection() as db:
-            row=db.execute("SELECT facts FROM ea_ledger WHERE assistant_id=%s AND kind='call.media_evidence' AND facts->>'call_id'=%s ORDER BY created_at DESC LIMIT 1",
-                (self.assistant_id,identifier)).fetchone()
-            return row['facts'] if row else None
-
-    def voicemail_evidence(self,identifier):
-        with self.repository.connection() as db:
-            return db.execute('''SELECT policy,asset_state,body,audio_digest,detector_state,state,reason,
-                playback_state,hangup_state,played_at,updated_at FROM ea_call_voicemail
-                WHERE assistant_id=%s AND call_id=%s''',(self.assistant_id,identifier)).fetchone()
 
     def by_provider(self,provider_id):
         with self.repository.connection() as db:

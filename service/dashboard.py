@@ -214,17 +214,17 @@ def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=Non
             {k:row.get(k) for k in ('id','conversation_id','parent_task_id','direction','state','provider_id','carrier_status','duration_seconds','finalized','native_finalized')})
         content+='<p class="small">An incoming transcript may be a voicemail system. Transcript generation and context acknowledgment do not prove listener playback or human confirmation.</p>'
         if row['parent_task_id']:content+='<a href="/dashboard/work/'+e(row['parent_task_id'])+'">Read mission outcome</a>'
-        content+='</section><section class="panel"><h2>Voicemail playback</h2><p>Finite application speech is separate from Live transcript. A playback mark confirms carrier playback, not mailbox storage or a human answer.</p>'+views.evidence('Saved finite voicemail receipt',await asyncio.to_thread(calls.voicemail_evidence,row['id']))+'</section><section class="panel"><h2>Captured transcript</h2>'
+        content+='</section><section class="panel"><h2>Captured transcript</h2>'
         groups=[]
         for part in row['transcript']:
             role=part.get('role','unknown')
-            if groups and groups[-1]['role']==role and groups[-1].get('delivery')==part.get('delivery'):
+            if groups and groups[-1]['role']==role:
                 groups[-1]['text']+=str(part.get('text',''));groups[-1]['end_ms']=part.get('end_ms')
-            else:groups.append({'role':role,'text':str(part.get('text','')),'start_ms':part.get('start_ms'),'end_ms':part.get('end_ms'),'delivery':part.get('delivery')})
+            else:groups.append({'role':role,'text':str(part.get('text','')),'start_ms':part.get('start_ms'),'end_ms':part.get('end_ms')})
         for part in groups:
-            content+='<article><h3>'+e('Incoming audio' if part['role']=='user' else 'Alli transcript' if part['role']=='assistant' else part['role'])+'</h3><p class="small">'+e(part['start_ms'])+'–'+e(part['end_ms'])+' ms · '+e(part.get('delivery') or 'captured transcript; playback unverified')+'</p><p>'+e(part['text'])+'</p></article>'
+            content+='<article><h3>'+e('Incoming audio' if part['role']=='user' else 'Alli transcript' if part['role']=='assistant' else part['role'])+'</h3><p class="small">'+e(part['start_ms'])+'–'+e(part['end_ms'])+' ms</p><p>'+e(part['text'])+'</p></article>'
         if not groups:content+='<p>No captured transcript.</p>'
-        content+=views.evidence('Raw saved transcript',row['transcript'])+'</section><section class="panel"><h2>Context diagnostics</h2><p>Pending context at session close does not establish whether an earlier message was delivered. Command IDs link future append errors to their acknowledgments; historical errors may lack attribution.</p>'+views.evidence('Saved Live errors',errors)+views.evidence('Context append receipts',updates)+views.evidence('Transport and Live event counts',await asyncio.to_thread(calls.media_evidence,row['id']))+'</section>'
+        content+=views.evidence('Raw saved transcript',row['transcript'])+'</section><section class="panel"><h2>Context diagnostics</h2><p>Pending context at session close does not establish whether an earlier message was delivered. Command IDs link future append errors to their acknowledgments; historical errors may lack attribution.</p>'+views.evidence('Saved Live errors',errors)+views.evidence('Context append receipts',updates)+'</section>'
         return page('Call evidence',content)
 
     @router.get('/dashboard/promises')

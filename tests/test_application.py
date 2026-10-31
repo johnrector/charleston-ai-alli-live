@@ -251,23 +251,3 @@ async def test_owner_call_evidence_view_is_read_only_escaped_and_distinguishes_v
             assert (await http.get('/dashboard/calls/not-a-call')).status_code==404
             assert repo.ready_tasks()==before and app.state.calls.get(call['id'])['state']=='finished'
             assert sdk.messages.create.call_count==0
-
-
-@pytest.mark.asyncio
-async def test_machine_detection_webhook_requires_signature_account_and_exact_call(application_setup):
-    from alli_core.authority import Actor
-    repo,_,build=application_setup;app=build()
-    async with app.router.lifespan_context(app):
-        owner=Actor('alli',repo.bootstrap_owner(OWNER),'dot',True,'test-owner')
-        task=repo.submit(owner,source_id='amd-hook-test',title='Call',instruction='Call once')
-        call=app.state.calls.queue(task['id'],owner.person_id,'Call once','amd-test',voicemail_policy='hang_up')
-        app.state.calls.claim();await app.state.voicemail.prepare(call)
-        app.state.calls.bind(call['id'],'CA-test',to=OWNER,from_=PHONE,status='in-progress')
-        path='/transport/amd/'+call['id']
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url=BASE) as http:
-            assert (await carrier_post(http,path,{'CallSid':'CA-test','AnsweredBy':'machine_end_beep'},valid=False)).status_code==403
-            assert (await carrier_post(http,path,{'AccountSid':'AC-wrong','CallSid':'CA-test','AnsweredBy':'machine_end_beep'})).status_code==403
-            assert (await carrier_post(http,path,{'CallSid':'CA-wrong','AnsweredBy':'machine_end_beep'})).status_code==400
-            assert (await carrier_post(http,path,{'CallSid':'CA-test','AnsweredBy':'machine_end_beep'})).status_code==204
-            assert app.state.calls.voicemail_evidence(call['id'])['detector_state']=='machine_end_beep'
-            assert app.state.calls.get(call['id'])['state']=='accepted' # No webhook dialing or hangup.

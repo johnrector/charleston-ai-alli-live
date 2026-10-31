@@ -562,7 +562,6 @@ class PostgresRepository:
             task = self._task(db, task_id, lock=True)
             if not task:
                 raise ValueError('Unknown assignment')
-            if task['context'].get('notification_policy')=='none':notify=False
             run = db.execute('SELECT turn_id FROM ea_agent_run WHERE task_id=%s', (task_id,)).fetchone()
             if run['turn_id'] == turn_id or task['state'] == 'cancelled':
                 return FinalizedOutcome(task['state'],task['result'])
@@ -770,9 +769,7 @@ class PostgresRepository:
                 'saved_updates':[json.loads(row['body']) for row in db.execute('''SELECT body FROM ea_agent_input
                     WHERE task_id=%s AND sent_at IS NULL ORDER BY created_at LIMIT 30''',(task_id,)).fetchall()],
                 'call_receipts':db.execute('''SELECT c.id,c.person_id,c.state,c.carrier_status,
-                    c.provider_id,c.duration_seconds,c.ended_at,v.transcript,v.finalized,
-                    (SELECT jsonb_build_object('body',m.body,'state',m.state,'reason',m.reason,'playback_state',m.playback_state,'hangup_state',m.hangup_state,'played_at',m.played_at)
-                    FROM ea_call_voicemail m WHERE m.assistant_id=c.assistant_id AND m.call_id=c.id) AS voicemail_evidence
+                    c.provider_id,c.duration_seconds,c.ended_at,v.transcript,v.finalized
                     FROM ea_phone_call c JOIN ea_conversation v ON v.id=c.conversation_id
                     WHERE c.assistant_id=%s AND c.parent_task_id=%s ORDER BY c.created_at LIMIT 10''',
                     (self.profile.id,task_id)).fetchall(),

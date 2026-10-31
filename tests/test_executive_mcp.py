@@ -175,23 +175,3 @@ async def test_relationship_and_operating_rule_tools_keep_owner_boundary(databas
                 ('operating_policies',{}),('remember_relationship',{'person_id':str(person['id']),
                     'note':'Do not grant this write','source_task_id':job['id']})]:
                 assert (await client.call_tool(name,args)).is_error
-
-
-@pytest.mark.asyncio
-async def test_temporary_voicemail_end_hold_does_not_cache_rejection_but_actual_end_is_once(database):
-    from types import SimpleNamespace as NS
-    from unittest.mock import AsyncMock
-    repo,owner,task,token,_=setup_server(database)
-    vm=NS(reserve_delegated_end=AsyncMock(side_effect=[False,True,True]))
-    calls=NS(current_for_task=lambda _: {'id':'saved-call','provider_id':'CA-test'},voicemail=vm)
-    carrier=NS(end=AsyncMock(return_value={'ok':True,'call_sid':'CA-test'}))
-    app=tool_http_app(create_tool_server(repo,'http://testserver',calls=calls,carrier=carrier),'http://testserver')
-    async with app.router.lifespan_context(app):
-        async with connected(app,token) as client:
-            first=await client.call_tool('end_phone_conversation',{})
-            assert first.structured_content['not_attempted'] is True
-            second=await client.call_tool('end_phone_conversation',{})
-            assert second.structured_content['ok'] is True
-            third=await client.call_tool('end_phone_conversation',{})
-            assert third.structured_content['ok'] is True
-    carrier.end.assert_awaited_once_with('CA-test')

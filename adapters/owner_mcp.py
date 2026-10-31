@@ -94,7 +94,7 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
             return to_jsonable_python(await scheduler.manage(await actor(),schedule_id,revision,action,
                 title=title,instruction=instruction,run_at=run_at,expression=expression,timezone_name=timezone_name))
 
-    @server.tool(structured_output=True,description='For exact authorized voicemail, approved_logistics may be a JSON object with voicemail_message and optional completion_notification boolean. Start one owner-authorized mission-driven call. Persist request_id and read its actual outcome. Explicit capabilities=[] disables conversation tools; omitted capabilities use approved-contact standing permissions. Never redial uncertainty under a fresh ID.')
+    @server.tool(structured_output=True,description='Start one owner-authorized mission-driven call. Persist request_id and read its actual outcome. Explicit capabilities=[] disables conversation tools; omitted capabilities use approved-contact standing permissions. Never redial uncertainty under a fresh ID.')
     async def call_outbound(request_id:str,phone:str,recipient_name:str,mission:str,email:str='',
         purpose:str='',preset:Literal['generic','scheduling','confirmation','follow_up']|None=None,
         capabilities:list[Literal['check_calendar','create_meeting','manage_calendar','send_email']]|None=None,
@@ -107,18 +107,6 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
         if capabilities is not None and 'create_meeting' in capabilities and ('check_calendar' not in capabilities or not email):
             raise ValueError('Call-specific meeting creation requires availability checking and a supplied invitation email')
         owner=await actor()
-        voicemail_message='';suppress_notifications=False
-        try:options=json.loads(approved_logistics)
-        except (ValueError,TypeError):options=None
-        if isinstance(options,dict) and 'voicemail_message' in options:
-            if set(options)-{'voicemail_message','completion_notification'}:raise ValueError('Unknown explicit call option')
-            voicemail_message=options['voicemail_message']
-            notification=options.get('completion_notification',True)
-            if (not isinstance(voicemail_message,str) or not 1<=len(voicemail_message)<=800
-                    or any(ord(x)<32 for x in voicemail_message) or type(notification) is not bool):
-                raise ValueError('Supply a bounded voicemail message and boolean notification preference')
-            if voicemail_policy!='generic_message':raise ValueError('Exact voicemail requires message policy')
-            suppress_notifications=not notification
         instruction=mission+'\nOwner-approved logistics: '+approved_logistics
         if appointment_start:instruction+='\nProposed start: '+appointment_start
         if appointment_end:instruction+='\nProposed end: '+appointment_end
@@ -137,11 +125,9 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
         person=await recipient(owner,phone,recipient_name,email)
         restricted=replace(owner,allowed_tools=('get_context',))
         task=await asyncio.to_thread(repository.submit,restricted,source_id='dot-call-task:'+request_id,
-            title='Call '+recipient_name,instruction='Report the actual result of this authorized call. Mission: '+instruction,
-            context={'notification_policy':'none'} if suppress_notifications else None)
+            title='Call '+recipient_name,instruction='Report the actual result of this authorized call. Mission: '+instruction)
         call=await asyncio.to_thread(calls.queue,task['id'],str(person['id']),instruction,'dot-call:'+request_id,
-            allowed_tools=allowed,invitation_email=email,voicemail_policy=voicemail_policy,
-            voicemail_message=voicemail_message,suppress_notifications=suppress_notifications)
+            allowed_tools=allowed,invitation_email=email)
         return to_jsonable_python({'ok':True,'request_id':request_id,'status':call['state'],'call_id':call['id'],
                                    'note':'Saved for dialing; no answer or conversation is confirmed yet.'})
 
@@ -162,9 +148,7 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
             'call_id':call['id'],'source_id':call['source_id'],'conversation_id':str(call['conversation_id']),
             'parent_task_id':call['parent_task_id'],'live_errors':await asyncio.to_thread(calls.errors,call['id']),
             'context_updates':await asyncio.to_thread(calls.context_updates,call['id']),
-            'voicemail_evidence':await asyncio.to_thread(calls.voicemail_evidence,call['id']),
-            'media_evidence':await asyncio.to_thread(calls.media_evidence,call['id']),
-            'duration_seconds':call['duration_seconds'],'ended_at':call['ended_at'],'native_finalized':call['native_finalized'],'transcript':call['transcript'],
+            'duration_seconds':call['duration_seconds'],'transcript':call['transcript'],
             'transcript_finalized':call['finalized'],'conversation_report':task['result'] if task else '',
             'confirmed_by_carrier_status':False})
 

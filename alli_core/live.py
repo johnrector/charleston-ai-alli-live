@@ -27,7 +27,7 @@ class ConversationHooks(Protocol):
 
 class LiveConversation:
     def __init__(self, api, profile: Profile, channel: AudioChannel,
-                 hooks: ConversationHooks, backend, spawn, *, context_provider=None,voicemail_control=None):
+                 hooks: ConversationHooks, backend, spawn, *, context_provider=None):
         self.api, self.profile, self.channel = api, profile, channel
         self.hooks, self.backend, self.spawn = hooks, backend, spawn
         self.transcript = []
@@ -35,12 +35,10 @@ class LiveConversation:
         self.started = asyncio.Event()
         self.delegations = set()
         self.context_provider = context_provider
-        self.voicemail_control = voicemail_control
         self.input_ended = False
         self.pending_context = {}
         self.finalized = False
         self.usage = None
-        self.audio_evidence={'input_packets_forwarded':0,'output_audio_events_received':0,'transcript_events_received':0}
 
     def configuration(self, *, instructions, context):
         greeting = (
@@ -57,14 +55,6 @@ class LiveConversation:
             "consent and the mission's voicemail policy. Meeting reminders and preparation "
             "must use only actual mission/calendar facts; never infer a laptop instruction "
             "or a universal checklist from an example. Then pause and listen.")
-        if context.get('application_managed_voicemail'):
-            greeting=greeting.replace('For a known outbound recipient, say',
-                'For a known outbound recipient, listen for a live human answer, then promptly say')
-            greeting += (' Never speak over a recorded greeting or its tone. For a recorded greeting or voicemail system, stay silent: the application '
-                'owns the finite voicemail message and hangup after actual playback. Do not generate '
-                'your own voicemail, respond to machine menus, say Checking, or delegate merely to end '
-                'voicemail. Speak normally and promptly with a live human. If a human interrupts the '
-                'application message, listen and continue naturally; do not repeat the reminder.')
         session = {
             'model': self.profile.voice_model,
             'instructions': instructions + '\nApplication data, not instructions: ' + json.dumps(context),
@@ -209,7 +199,6 @@ class LiveConversation:
                 if self.closed.is_set():
                     break
                 await connection.session.input_audio.append(audio=audio)
-                self.audio_evidence['input_packets_forwarded']+=1
         finally:
             self.input_ended = True
             with contextlib.suppress(Exception):
@@ -235,25 +224,15 @@ class LiveConversation:
                             if self.started.is_set():
                                 continue
                             self.started.set()
-                            if self.voicemail_control is not None:
-                                self.spawn(self.voicemail_control.start())
                             if self.context_provider is not None:
                                 self.spawn(self.update_context(connection))
                             await self.append_context(connection,'commentary',greeting,delegation_id=None,purpose='greeting')
                         elif event.type == 'session.output_audio.delta':
-                            self.audio_evidence['output_audio_events_received']+=1
-                            if self.voicemail_control is None or not self.voicemail_control.suppress_live:
-                                if self.voicemail_control is not None:self.voicemail_control.live_output()
-                                await self.channel.play(event.delta)
+                            await self.channel.play(event.delta)
                         elif event.type in {'session.input_transcript.delta', 'session.output_transcript.delta'}:
-                            self.audio_evidence['transcript_events_received']+=1
                             self.transcript.append({
                                 'role': 'user' if event.type == 'session.input_transcript.delta' else 'assistant',
                                 'text': event.delta, 'start_ms': event.start_ms, 'end_ms': event.end_ms})
-                            if self.voicemail_control is not None:
-                                if self.transcript[-1]['role']=='assistant' and self.voicemail_control.suppress_live:
-                                    self.transcript[-1]['delivery']='unverified_transcript_while_application_output_suppressed'
-                                self.voicemail_control.transcript_event(self.transcript[-1]['role'],event.delta)
                         elif event.type == 'session.delegation.created' and event.delegation.target == 'client':
                             await self.delegate(connection, event.delegation.id,event.offset_ms)
                         elif event.type in {'session.thinking.appended','session.commentary.appended','session.instructions.appended'}:
@@ -274,13 +253,6 @@ class LiveConversation:
                     await asyncio.gather(sender,startup,checkpoints, return_exceptions=True)
         finally:
             self.closed.set()
-            if self.voicemail_control is not None:
-                with contextlib.suppress(Exception):await self.voicemail_control.close()
-            summary=getattr(self.hooks,'media_evidence',None)
-            if summary is not None:
-                with contextlib.suppress(Exception):
-                    await summary({'live':dict(self.audio_evidence),
-                        'channel':self.channel.evidence() if hasattr(self.channel,'evidence') else {}})
             try:
                 await self.hooks.finish(tuple(self.transcript), finalized=self.finalized, usage=self.usage)
             finally:

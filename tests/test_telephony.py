@@ -85,12 +85,3 @@ async def test_media_preserves_pcmu_audio_and_binds_the_signed_call():
     wrong=Socket();await wrong.incoming.put(start('CA-someone-else'))
     with pytest.raises(ValueError,match='identity mismatch'):
         await MediaChannel(wrong,account_sid='AC-test',call_sid='CA-test').handshake()
-
-
-def test_voicemail_acoustic_detection_is_asynchronous_and_bound_to_signed_callback_path():
-    transport=carrier()
-    asyncio.run(transport.dial('+18435550101',answer_path='/answer/test',status_path='/status/test',voicemail_path='/transport/amd/test'))
-    args=transport.client.calls.create.call_args.kwargs
-    assert args['machine_detection']=='DetectMessageEnd' and args['async_amd']=='true'
-    assert args['async_amd_status_callback']=='https://alli.example.com/transport/amd/test'
-    assert args['async_amd_status_callback_method']=='POST'

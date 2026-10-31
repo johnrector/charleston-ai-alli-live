@@ -66,11 +66,8 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
     from adapters.people_workflow import PeopleWorkflow
     people_workflow=PeopleWorkflow(repository,google,scheduler,calls)
     calls.people_workflow=people_workflow
-    from adapters.voicemail import Voicemail
-    voicemail=Voicemail(repository,calls,carrier,api)
-    calls.voicemail=voicemail
     worker=Worker(repository,runtime,outbox,carrier,settings.base_url,calls=calls,computer=computer,
-                  release=settings.release,scheduler=scheduler,people_workflow=people_workflow,voicemail=voicemail,text_conversation=TextConversation(repository,api))
+                  release=settings.release,scheduler=scheduler,people_workflow=people_workflow,text_conversation=TextConversation(repository,api))
     tools=tool_http_app(create_tool_server(repository,settings.base_url,
         google=google,shopify=shopify,deliveries=outbox,calls=calls,carrier=carrier,computer=computer,connections=connections,scheduler=scheduler,people_workflow=people_workflow),settings.base_url)
     oauth=OwnerOAuth(repository,settings.base_url,settings.session_secret,settings.google_key.encode())
@@ -150,7 +147,6 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
     app.state.repository,app.state.worker=repository,worker
     app.state.calls,app.state.outbox,app.state.sessions,app.state.oauth=calls,outbox,sessions,oauth
     app.state.events=events
-    app.state.voicemail=voicemail
     app.add_middleware(ToolSurface,tools=tools,owner=owner_tools)
     app.include_router(dashboard_router(settings,repository,sessions,carrier,outbox,scheduler=scheduler,calls=calls))
     app.include_router(account_router(settings,repository,sessions,connections,google,shopify))
@@ -240,12 +236,6 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
         if current['person_status'] in {'suspended','deleted'}:return hangup()
         return media_response(call)
 
-    @app.post('/transport/amd/{identifier}')
-    async def answering_machine(request:Request,identifier:str):
-        data=await signed(request)
-        if not await voicemail.detected(identifier,data):raise HTTPException(400,'Call detection identity mismatch')
-        return Response(status_code=204)
-
     @app.post('/transport/call-status/{identifier}')
     async def call_status(request:Request,identifier:str):
         data=await signed(request)
@@ -276,12 +266,10 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
             await channel.handshake()
             await asyncio.to_thread(calls.attach_media,identifier,call['provider_id'])
             hooks=ConversationHooks(repository,calls,outbox,identifier)
-            control=voicemail.attach(call,channel,spawn) if call['direction']=='outbound' else None
             conversation=LiveConversation(api,repository.profile,channel,hooks,hooks.backend,spawn,
-                context_provider=lambda:relationships.voice_brief(call),voicemail_control=control)
+                context_provider=lambda:relationships.voice_brief(call))
             context={'caller':{'name':call['name'],'status':call['person_status']},
                 'scope':call['scope'],'direction':call['direction'],'mission':call['instruction'],
-                'application_managed_voicemail':control is not None,
                 'principal':repository.profile.principal,'public_facts':repository.profile.public_facts,
                 'facts_reviewed_at':repository.profile.facts_reviewed_at,'conversation_budget_seconds':call['max_seconds']}
             # An unknown contact cannot consume an unlimited conversation.
