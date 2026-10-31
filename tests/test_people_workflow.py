@@ -360,3 +360,15 @@ async def test_nickname_requires_this_person_self_statement_and_is_cached_before
     with pytest.raises(ValueError):
         flow.save_preparation(owner,other['task_id'],state='ready',safe_brief='Hello',facts=[],
             sources=[{'reference':reference,'observed_at':'2026-10-31'}],preferred_name='Invented',name_source=reference)
+
+
+@pytest.mark.asyncio
+async def test_explicit_contact_hold_preserves_separate_conditional_followthrough(setup):
+    repo,owner,person,task,flow,google,event=setup
+    await flow.configure(owner,task['id'])
+    policy=flow.policy();body={**policy['body'],'contact_holds':{person:{'reason':'Existing separately conditional follow-through','source_task_id':task['id']}}}
+    repo.put_record(owner,str(policy['collection_id']),body,record_id=str(policy['id']),revision=policy['revision'])
+    await flow.configure(owner,task['id'],enabled=False);await flow.configure(owner,task['id'])
+    await flow.plan(owner,task['id'])
+    assert Oversight(repo).coverage(owner)['events'][0]['state']=='excluded'
+    with repo.connection() as db:assert db.execute('SELECT count(*) AS n FROM ea_appointment_intent').fetchone()['n']==0

@@ -63,7 +63,7 @@ class PeopleWorkflow:
                 'voicemail':'Brief named appointment reminder; no private research or sensitive details.',
                 'attempts':1,'pre_dial':'Recheck current calendar revision, recipient endpoint/status, actual correspondence, preparation and duplicate receipts. Hold on uncertainty.'})]:
             old=await asyncio.to_thread(self.policy,key)
-            record={**body,'rule_key':key,'source_task_id':task_id,'authorized_by':actor.person_id,
+            record={**(old['body'] if old else {}),**body,'rule_key':key,'source_task_id':task_id,'authorized_by':actor.person_id,
                     'version':1,'configured_at':now().isoformat()}
             if old and old['body'].get('enabled')==enabled:
                 continue
@@ -248,6 +248,9 @@ class PeopleWorkflow:
         if event.get('organizer',{}).get('email','').casefold()!=owner:return 'not owner-organized'
         if person['kind']=='owner' or person['status']!='approved' or not person['phone']:
             return 'verified approved contact and phone required'
+        policy=self.policy()
+        if policy and str(person['id']) in policy['body'].get('contact_holds',{}):
+            return 'separate conditional follow-through'
         attendee=next((a for a in event.get('attendees',[]) if a.get('email','').casefold()==email.casefold()),None)
         if not attendee or attendee.get('responseStatus') in {'declined','tentative'}:return 'attendance excluded'
         self_attendee=next((a for a in event.get('attendees',[]) if a.get('self') or a.get('email','').casefold()==owner),None)
@@ -341,7 +344,7 @@ class PeopleWorkflow:
                 person=await asyncio.to_thread(self.person,people[0]['id'])
                 exclusion=self.eligible(event,person,email)
                 if exclusion:
-                    item.update(state='excluded' if exclusion in {'excluded event','attendance excluded','owner not attending','not owner-organized'} else 'blocked',reason=exclusion)
+                    item.update(state='excluded' if exclusion in {'excluded event','attendance excluded','owner not attending','not owner-organized','separate conditional follow-through'} else 'blocked',reason=exclusion)
                     await self.cancel_event(actor,event['id'],email)
                     continue
                 try:due=self.due(event,person)
