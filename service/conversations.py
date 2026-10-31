@@ -46,7 +46,7 @@ class ConversationHooks:
                     call['invitation_email'])
         task=await asyncio.to_thread(self.repository.submit,actor,source_id=source,
             title='Conversation with '+(call['name'] or 'a contact'),instruction=instruction,
-            conversation_id=str(call['conversation_id']),context={'call_id':self.call_id})
+            conversation_id=str(call['conversation_id']),context={'call_id':self.call_id,**({'notification_policy':'none'} if call.get('suppress_notifications') else {})})
         return task,False
 
     async def save_delegation(self,delegation_id,transcript,*,offset_ms):

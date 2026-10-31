@@ -562,6 +562,7 @@ class PostgresRepository:
             task = self._task(db, task_id, lock=True)
             if not task:
                 raise ValueError('Unknown assignment')
+            if task['context'].get('notification_policy')=='none':notify=False
             run = db.execute('SELECT turn_id FROM ea_agent_run WHERE task_id=%s', (task_id,)).fetchone()
             if run['turn_id'] == turn_id or task['state'] == 'cancelled':
                 return FinalizedOutcome(task['state'],task['result'])

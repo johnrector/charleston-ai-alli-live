@@ -131,3 +131,39 @@ async def test_owner_read_lookup_finds_native_and_legacy_calls_without_dialing(d
                 result=(await client.call_tool('get_call_result',{'request_id':'legacy-request'})).structured_content
                 assert result['call_id']==legacy['id']
         carrier.dial.assert_not_awaited();carrier.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_owner_exact_voicemail_options_are_saved_once_and_completion_notifications_suppressed(database):
+    import json
+    from adapters.voicemail import Voicemail
+    settings=Settings('https://testserver','+18435550100','+18435550999','AC'+'1'*32,database,
+        'test-carrier-secret','test-session-secret',Fernet.generate_key().decode(),background=False)
+    repo=PostgresRepository(database,Profile.load('profiles/alli.toml'))
+    api=NS(close=AsyncMock());api.with_options=lambda **kwargs:api
+    carrier=NS(send=AsyncMock(),dial=AsyncMock())
+    app=create_application(settings,repo,carrier,None,api)
+    message='Hi John, this is Allie. This is our voicemail test. No need to call back.'
+    async with app.router.lifespan_context(app):
+        token=await app.state.oauth.issue('exact-voicemail-test')
+        async with httpx2.AsyncClient(transport=httpx2.ASGITransport(app),headers={'Authorization':'Bearer '+token.access_token}) as http:
+            async with Client(streamable_http_client('https://testserver/mcp',http_client=http),mode='2026-07-28') as client:
+                args={'request_id':'one-exact-test','phone':settings.owner_phone,'recipient_name':'John',
+                    'mission':'One test. No email or SMS.','capabilities':[],
+                    'approved_logistics':json.dumps({'voicemail_message':message,'completion_notification':False})}
+                first=await client.call_tool('call_outbound',args)
+                assert not first.is_error
+                duplicate=await client.call_tool('call_outbound',args)
+                assert duplicate.structured_content['call_id']==first.structured_content['call_id']
+                call=app.state.calls.get(first.structured_content['call_id'])
+                assert call['voicemail_message']==message and call['suppress_notifications'] is True
+                assert Voicemail(repo,app.state.calls,carrier,api).body(call)==message
+                task=repo.task_result(call['parent_task_id'])
+                assert task['context']['notification_policy']=='none'
+                repo.record_outcome(task['id'],'completed','Test receipt',turn_id='test-result',notify=True)
+                assert repo.task_result(task['id'])['context']['notify_requested'] is False
+                assert not repo.reportable_tasks()
+                rejected=await client.call_tool('call_outbound',{**args,'request_id':'bad-options',
+                    'approved_logistics':json.dumps({'voicemail_message':message,'completion_notification':'false'})})
+                assert rejected.is_error
+    carrier.dial.assert_not_awaited();carrier.send.assert_not_awaited()

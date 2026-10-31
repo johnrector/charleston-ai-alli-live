@@ -56,7 +56,9 @@ class CallRepository:
                 {'call_id':identifier,'number_verified':verified},person_id=person['id'])
             return row
 
-    def queue(self,task_id,person_id,instruction,source_id,*,allowed_tools=None,invitation_email='',voicemail_policy='generic_message'):
+    def queue(self,task_id,person_id,instruction,source_id,*,allowed_tools=None,invitation_email='',voicemail_policy='generic_message',voicemail_message='',suppress_notifications=False):
+        if (not isinstance(voicemail_message,str) or len(voicemail_message)>800 or any(ord(x)<32 for x in voicemail_message)
+                or type(suppress_notifications) is not bool):raise ValueError('Supply bounded explicit voicemail options')
         if voicemail_policy not in {'generic_message','hang_up'}:raise ValueError('Unknown voicemail policy')
         if not isinstance(instruction,str) or not 1<=len(instruction)<=12000:
             raise ValueError('Supply a concise call mission')
@@ -99,11 +101,11 @@ class CallRepository:
                 VALUES(%s,%s,%s,'phone',%s) RETURNING id''',
                 (self.assistant_id,person_id,'outbound:'+identifier,scope)).fetchone()
             row=db.execute('''INSERT INTO ea_phone_call(id,assistant_id,conversation_id,person_id,parent_task_id,
-                source_id,direction,instruction,expected_from,expected_to,state,allowed_tools,invitation_email,voicemail_policy)
-                VALUES(%s,%s,%s,%s,%s,%s,'outbound',%s,%s,%s,'queued',%s,%s,%s) RETURNING *''',
+                source_id,direction,instruction,expected_from,expected_to,state,allowed_tools,invitation_email,voicemail_policy,voicemail_message,suppress_notifications)
+                VALUES(%s,%s,%s,%s,%s,%s,'outbound',%s,%s,%s,'queued',%s,%s,%s,%s,%s) RETURNING *''',
                 (identifier,self.assistant_id,conversation['id'],person_id,task_id,source_id,
                  instruction,self.phone,recipient['address'],Jsonb(list(allowed_tools)) if allowed_tools is not None else None,
-                 invitation_email,voicemail_policy)).fetchone()
+                 invitation_email,voicemail_policy,voicemail_message,suppress_notifications)).fetchone()
             if prepared and prepared.get('id'):
                 row=db.execute('UPDATE ea_phone_call SET preparation_id=%s WHERE id=%s RETURNING *',(prepared['id'],identifier)).fetchone()
             db.execute('''UPDATE ea_task SET context=jsonb_set(context,'{pending_calls}',

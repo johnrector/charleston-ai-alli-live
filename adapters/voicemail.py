@@ -46,6 +46,8 @@ class Voicemail:
         if changed:self.event(call_id,state,{'reason':reason})
 
     def body(self,call):
+        if call.get('voicemail_message'):
+            return call['voicemail_message'] # Exact owner-approved text; never inferred from mission prose.
         name=(call.get('name') or '').strip()[:80]
         greeting=('Hi '+name+'. ') if name else 'Hello. '
         text=greeting+'This is Alli, '+self.repository.profile.principal+"'s AI assistant. "

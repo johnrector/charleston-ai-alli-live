@@ -27,3 +27,7 @@ Verification uses isolated disposable Postgres and mocked provider APIs, coverin
 - [Twilio Media Streams WebSocket messages](https://www.twilio.com/docs/voice/media-streams/websocket-messages): outbound media, mark acknowledgments and clear returning discarded marks.
 - [Twilio answering machine detection](https://www.twilio.com/docs/voice/answering-machine-detection): asynchronous DetectMessageEnd and callback values.
 - [OpenAI text to speech](https://developers.openai.com/api/docs/guides/text-to-speech): finite speech generation and raw PCM output.
+
+## Exact owner-authorized message and silent completion
+
+For an explicit exact voicemail, the existing owner `call_outbound.approved_logistics` string accepts a JSON object containing only `voicemail_message` (1–800 characters, no control characters) and optional `completion_notification` (boolean). Message text is persisted separately and read verbatim, never inferred from mission prose. Plain logistics text retains its prior meaning. `completion_notification:false` places a server-enforced `notification_policy:none` on the owner call task and its new preparation/voice-child tasks; model output cannot re-enable completion SMS. Existing stable request identity includes the original logistics object; it cannot be used to change/replay a call. This does not grant calling, messaging or account authority.

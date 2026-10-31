@@ -147,7 +147,7 @@ class PeopleWorkflow:
                 'save_preparation must finish before reporting completion; suppress notification. Preparation ID '+identifier)
             prep_task=self.repository.submit(owner,source_id='people-prep:'+identifier,title='Prepare '+person['name'][:120],
                 instruction=instruction,context={'backend_only':True,'internal_execution':True,'preparation_id':identifier,
-                    'preparation_person_id':person_id},transaction=db)
+                    'preparation_person_id':person_id,**({'notification_policy':'none'} if task['context'].get('notification_policy')=='none' else {})},transaction=db)
             row=db.execute('''INSERT INTO ea_person_preparation(id,assistant_id,person_id,task_id,person_revision,
                 conversation_id,event,mail_snapshot) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) RETURNING *''',
                 (identifier,self.repository.profile.id,person_id,prep_task['id'],person['revision'],

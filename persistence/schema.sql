@@ -499,3 +499,5 @@ ALTER TABLE ea_call_voicemail ADD COLUMN IF NOT EXISTS playback_state text NOT N
 ALTER TABLE ea_call_voicemail ADD COLUMN IF NOT EXISTS hangup_state text NOT NULL DEFAULT 'not_requested';
 ALTER TABLE ea_call_voicemail ADD COLUMN IF NOT EXISTS played_at timestamptz;
 ALTER TABLE ea_call_voicemail ADD COLUMN IF NOT EXISTS detector_provider_id text;
+ALTER TABLE ea_phone_call ADD COLUMN IF NOT EXISTS voicemail_message text NOT NULL DEFAULT '';
+ALTER TABLE ea_phone_call ADD COLUMN IF NOT EXISTS suppress_notifications boolean NOT NULL DEFAULT false;
