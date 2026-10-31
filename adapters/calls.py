@@ -250,13 +250,32 @@ class CallRepository:
                 {'call_id':identifier,'native_finalized':finalized,'usage':usage},
                 person_id=row['person_id'],task_id=row['parent_task_id'])
 
-    def error(self,identifier,code):
+    def error(self,identifier,code,details=None):
         with self.repository.connection() as db:
             row=db.execute('SELECT person_id,parent_task_id FROM ea_phone_call WHERE assistant_id=%s AND id=%s',
                            (self.assistant_id,identifier)).fetchone()
             if not row:raise ValueError('Unknown call')
-            self.repository._event(db,'call:'+identifier+':error:'+code,'call.error',
-                {'call_id':identifier,'code':code},person_id=row['person_id'],task_id=row['parent_task_id'])
+            attribution=(details or {}).get('client_event_id')
+            self.repository._event(db,'call:'+identifier+':error:'+code+(':'+attribution if attribution else ''),'call.error',
+                {'call_id':identifier,'code':code,**({'details':details} if details else {})},person_id=row['person_id'],task_id=row['parent_task_id'])
+
+    def context_update(self,identifier,evidence):
+        allowed={'client_event_id','command_type','purpose','delegation_id','content_bytes',
+            'state','speech_or_playback_confirmed','estimated_start_ms','estimated_end_ms','session_ending'}
+        if set(evidence)-allowed or not evidence.get('client_event_id'):
+            raise ValueError('Invalid context-update evidence')
+        with self.repository.connection() as db:
+            row=db.execute('SELECT person_id,parent_task_id FROM ea_phone_call WHERE assistant_id=%s AND id=%s',
+                (self.assistant_id,identifier)).fetchone()
+            if not row:raise ValueError('Unknown call')
+            self.repository._event(db,'call:'+identifier+':context:'+evidence['client_event_id']+':'+evidence['state'],
+                'call.context_update',{'call_id':identifier,**evidence},person_id=row['person_id'],task_id=row['parent_task_id'])
+
+    def context_updates(self,identifier):
+        with self.repository.connection() as db:
+            return db.execute("""SELECT created_at,facts FROM ea_activity WHERE assistant_id=%s
+                AND kind='call.context_update' AND facts->>'call_id'=%s ORDER BY created_at,id LIMIT 100""",
+                (self.assistant_id,identifier)).fetchall()
 
     def unreported(self):
         with self.repository.connection() as db:

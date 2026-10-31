@@ -122,6 +122,7 @@ def call_history(calls,zone):
     content='<section class="panel"><div class="panel-head"><h2>Actual call activity</h2><span class="badge outline">Transport receipts</span></div><p class="small">Carrier completion and transcript finalization do not prove a human answered or an appointment was confirmed. Read the mission outcome.</p>'
     for call in calls:
         content+='<div class="list-row"><span class="row-icon" aria-hidden="true">↗</span><div><h3>'+e(call['name'] or 'Unnamed person')+' · '+e(call['direction'])+'</h3><p>'+e(when(call['created_at'],zone))+'</p><div class="call-stages"><span>Intent: '+e(call['state'])+'</span><span>Carrier: '+e(call['carrier_status'] or 'No receipt')+'</span><span>Transcript: '+('Finalized' if call['transcript_finalized'] else 'Unconfirmed')+'</span></div>'
+        content+='<a class="text-link" href="/dashboard/calls/'+e(call['id'])+'">Read call evidence →</a> '
         if call['parent_task_id']:content+='<a class="text-link" href="/dashboard/work/'+e(call['parent_task_id'])+'">Read mission outcome →</a>'
         content+='</div>'+badge(call['state'])+'</div>'
     return content+('' if calls else '<p class="small">No saved calls in this view.</p>')+'</section>'

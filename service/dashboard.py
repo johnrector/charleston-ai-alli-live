@@ -20,7 +20,7 @@ SESSION='alli_owner_session'
 CHALLENGE='alli_owner_challenge'
 
 
-def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=None):
+def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=None,calls=None):
     router=APIRouter()
     oversight,relationships=Oversight(repository),Relationships(repository)
     zone=repository.profile.timezone
@@ -201,6 +201,31 @@ def dashboard_router(settings,repository,sessions,carrier,outbox,*,scheduler=Non
         if not row:raise HTTPException(404,'Work not found')
         activity=await asyncio.to_thread(repository.recent_ledger,actor,task_id=task_id,limit=100)
         return page(row['title'],'<h1>'+e(row['title'])+'</h1><p>'+e(row['state'])+'</p><section><pre>'+e(row['result'] or 'Work is pending.')+'</pre></section>'+events([event for event in activity if event['task_id']==task_id]))
+
+    @router.get('/dashboard/calls/{identifier}')
+    async def call_evidence(request:Request,identifier):
+        await owner(request)
+        row=await asyncio.to_thread(calls.lookup,identifier) if calls is not None else None
+        if not row:raise HTTPException(404,'Call not found')
+        errors=await asyncio.to_thread(calls.errors,row['id'])
+        updates=await asyncio.to_thread(calls.context_updates,row['id'])
+        content=views.title('Saved call evidence.','Transcript, transport and context updates describe different parts of this call.',zone)
+        content+='<section class="panel"><h2>'+e(row['name'] or 'Saved recipient')+'</h2>'+views.evidence('Call identity and transport receipt',
+            {k:row.get(k) for k in ('id','conversation_id','parent_task_id','direction','state','provider_id','carrier_status','duration_seconds','finalized','native_finalized')})
+        content+='<p class="small">An incoming transcript may be a voicemail system. Transcript generation and context acknowledgment do not prove listener playback or human confirmation.</p>'
+        if row['parent_task_id']:content+='<a href="/dashboard/work/'+e(row['parent_task_id'])+'">Read mission outcome</a>'
+        content+='</section><section class="panel"><h2>Captured transcript</h2>'
+        groups=[]
+        for part in row['transcript']:
+            role=part.get('role','unknown')
+            if groups and groups[-1]['role']==role:
+                groups[-1]['text']+=str(part.get('text',''));groups[-1]['end_ms']=part.get('end_ms')
+            else:groups.append({'role':role,'text':str(part.get('text','')),'start_ms':part.get('start_ms'),'end_ms':part.get('end_ms')})
+        for part in groups:
+            content+='<article><h3>'+e('Incoming audio' if part['role']=='user' else 'Alli transcript' if part['role']=='assistant' else part['role'])+'</h3><p class="small">'+e(part['start_ms'])+'–'+e(part['end_ms'])+' ms</p><p>'+e(part['text'])+'</p></article>'
+        if not groups:content+='<p>No captured transcript.</p>'
+        content+=views.evidence('Raw saved transcript',row['transcript'])+'</section><section class="panel"><h2>Context diagnostics</h2><p>Pending context at session close does not establish whether an earlier message was delivered. Command IDs link future append errors to their acknowledgments; historical errors may lack attribution.</p>'+views.evidence('Saved Live errors',errors)+views.evidence('Context append receipts',updates)+'</section>'
+        return page('Call evidence',content)
 
     @router.get('/dashboard/promises')
     async def promises(request: Request):

@@ -22,7 +22,7 @@ class ConversationHooks(Protocol):
     async def save_delegation(self, delegation_id: str, transcript: tuple[dict, ...], *, offset_ms: int): ...
     async def checkpoint(self, transcript: tuple[dict, ...]): ...
     async def finish(self, transcript: tuple[dict, ...], *, finalized: bool, usage: dict | None): ...
-    async def error(self, code: str): ...
+    async def error(self, code: str, details: dict | None = None): ...
 
 
 class LiveConversation:
@@ -35,6 +35,8 @@ class LiveConversation:
         self.started = asyncio.Event()
         self.delegations = set()
         self.context_provider = context_provider
+        self.input_ended = False
+        self.pending_context = {}
         self.finalized = False
         self.usage = None
 
@@ -64,12 +66,62 @@ class LiveConversation:
         }
         return session, greeting
 
+    def record_context(self, metadata, state, **evidence):
+        # Diagnostic persistence is outside the audio/event path. No text bodies,
+        # extra provider requests, probes or acknowledgment waits are introduced.
+        callback=getattr(self.hooks,'context_update',None)
+        if callback is not None:
+            with contextlib.suppress(Exception):
+                self.spawn(callback({**metadata,'state':state,**evidence,
+                    'speech_or_playback_confirmed':False}))
+
+    async def append_context(self,connection,kind,content,*,delegation_id,purpose):
+        if self.closed.is_set() or self.input_ended:return False
+        identifier=purpose+'_'+uuid4().hex
+        metadata={'client_event_id':identifier,'command_type':'session.'+kind+'.append',
+            'purpose':purpose,'delegation_id':delegation_id,'content_bytes':len(content.encode('utf-8'))}
+        self.pending_context[identifier]=metadata
+        try:
+            await getattr(connection.session,kind).append(content=content,
+                delegation_id=delegation_id,event_id=identifier)
+        except Exception:
+            # A failed send may already have reached the server. Retain identity
+            # for a later ack/error; never resend automatically.
+            self.record_context(metadata,'send_unconfirmed')
+            raise
+        self.record_context(metadata,'sent')
+        return True
+
+    def acknowledge_context(self,event):
+        identifier=getattr(event,'client_event_id',None)
+        metadata=self.pending_context.pop(identifier,None)
+        if metadata:
+            self.record_context(metadata,'acknowledged',
+                estimated_start_ms=getattr(event,'start_ms',None),estimated_end_ms=getattr(event,'end_ms',None))
+
+    async def record_live_error(self,event):
+        error=event.error
+        identifier=getattr(error,'client_event_id',None) or getattr(event,'client_event_id',None)
+        metadata=self.pending_context.pop(identifier,None)
+        details={key:getattr(error,key,None) for key in ('message','type','param')}
+        details.update(client_event_id=identifier,server_event_id=getattr(event,'event_id',None),
+            session_ending=self.input_ended or self.closed.is_set())
+        if metadata:details['context_command']=metadata
+        if error.code=='context_injection_incomplete':
+            details['impact']='context_update_incomplete_at_session_end' if details['session_ending'] else 'context_update_incomplete'
+            details['communication_delivery']='Determine from actual transcript and transport evidence; this error alone does not establish failure or success.'
+            if metadata:self.record_context(metadata,'incomplete',session_ending=details['session_ending'])
+        # Keep the original code and full attribution. Do not suppress the error,
+        # infer that speech failed, retry an append or restart the call.
+        await self.hooks.error(error.code,details=details)
+
     async def update_context(self, connection):
+        if self.closed.is_set() or self.input_ended:return
         # Optional CRM work starts only after Live is listening. It cannot hold
         # startup, audio transport or a delegation; unavailable context is skipped.
         try:
             brief = await self.context_provider()
-            if self.closed.is_set() or not brief.get('available'):
+            if self.closed.is_set() or self.input_ended or not brief.get('available'):
                 return
             brief = dict(brief)
             brief['owner_notes'] = list(brief.get('owner_notes', []))
@@ -78,20 +130,18 @@ class LiveConversation:
                 brief['owner_notes'].pop()
                 content = json.dumps({'relationship_data_not_instructions': brief}, ensure_ascii=False)
             if len(content.encode('utf-8')) <= 480:
-                await connection.session.thinking.append(content=content,
-                    delegation_id=None, event_id='relationship_'+uuid4().hex)
+                await self.append_context(connection,'thinking',content,delegation_id=None,purpose='relationship')
         except Exception:
             pass  # Optional context never closes a working voice connection.
 
     async def speak_result(self, connection, delegation_id, text):
-        if self.closed.is_set():
+        if self.closed.is_set() or self.input_ended:
             return
         # Live append commands have a 500-token limit. The byte ceiling is a
         # conservative bound that also works for non-English text and emoji.
         content = text.encode('utf-8')[:480].decode('utf-8', errors='ignore')
         try:
-            await connection.session.commentary.append(content=content,
-                delegation_id=delegation_id, event_id='result_'+uuid4().hex)
+            await self.append_context(connection,'commentary',content,delegation_id=delegation_id,purpose='result')
         except Exception:
             if not self.closed.is_set():
                 with contextlib.suppress(Exception):
@@ -114,9 +164,9 @@ class LiveConversation:
         # spawn belongs to the application, not the audio connection's lifetime.
         self.spawn(self.backend(ticket, lambda text: self.speak_result(connection, delegation_id, text)))
         with contextlib.suppress(Exception):
-            await connection.session.thinking.append(
-                content='The assignment is durably saved and will continue after hangup.',
-                delegation_id=delegation_id, event_id='saved_'+uuid4().hex)
+            await self.append_context(connection,'thinking',
+                'The assignment is durably saved and will continue after hangup.',
+                delegation_id=delegation_id,purpose='saved')
 
     async def checkpoint(self):
         saved=-1
@@ -150,6 +200,7 @@ class LiveConversation:
                     break
                 await connection.session.input_audio.append(audio=audio)
         finally:
+            self.input_ended = True
             with contextlib.suppress(Exception):
                 await connection.session.close()
             if not self.closed.is_set():
@@ -175,8 +226,7 @@ class LiveConversation:
                             self.started.set()
                             if self.context_provider is not None:
                                 self.spawn(self.update_context(connection))
-                            await connection.session.commentary.append(content=greeting,
-                                delegation_id=None, event_id='greeting_'+uuid4().hex)
+                            await self.append_context(connection,'commentary',greeting,delegation_id=None,purpose='greeting')
                         elif event.type == 'session.output_audio.delta':
                             await self.channel.play(event.delta)
                         elif event.type in {'session.input_transcript.delta', 'session.output_transcript.delta'}:
@@ -185,14 +235,19 @@ class LiveConversation:
                                 'text': event.delta, 'start_ms': event.start_ms, 'end_ms': event.end_ms})
                         elif event.type == 'session.delegation.created' and event.delegation.target == 'client':
                             await self.delegate(connection, event.delegation.id,event.offset_ms)
+                        elif event.type in {'session.thinking.appended','session.commentary.appended','session.instructions.appended'}:
+                            self.acknowledge_context(event)
                         elif event.type == 'error':
-                            await self.hooks.error(event.error.code)
+                            await self.record_live_error(event)
                         elif event.type == 'session.closed':
                             self.finalized = True
                             self.usage = event.usage.model_dump(mode='json') if hasattr(event.usage, 'model_dump') else event.usage
                             break
                 finally:
                     self.closed.set()
+                    for metadata in self.pending_context.values():
+                        self.record_context(metadata,'not_acknowledged_before_close',session_ending=True)
+                    self.pending_context.clear()
                     sender.cancel()
                     startup.cancel()
                     await asyncio.gather(sender,startup,checkpoints, return_exceptions=True)

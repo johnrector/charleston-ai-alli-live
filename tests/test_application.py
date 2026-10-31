@@ -221,3 +221,33 @@ def test_cached_diagnostic_clearly_identifies_an_earlier_release():
     assert 'Checked release:' in page and 'earlier-release' in page and 'current-release' in page
     assert 'It has not tested this release' in page
     assert 'earlier application release' in overview(summary,[],[],'America/New_York','current-release')
+
+
+@pytest.mark.asyncio
+async def test_owner_call_evidence_view_is_read_only_escaped_and_distinguishes_voicemail(application_setup):
+    from alli_core.authority import Actor
+    repo,sdk,build=application_setup
+    app=build()
+    async with app.router.lifespan_context(app):
+        owner=repo.owner_actor('call-evidence-test')
+        task=repo.submit(owner,source_id='native-call-evidence',title='Native call',instruction='Saved mission')
+        call=app.state.calls.queue(task['id'],owner.person_id,'Saved mission','native-read-only')
+        app.state.calls.claim();app.state.calls.bind(call['id'],'CA-evidence',to=OWNER,from_=PHONE,status='completed',duration=98)
+        repo.save_transcript(str(call['conversation_id']),[{'role':'assistant','text':'<script>untrusted</script>','start_ms':100,'end_ms':500},
+            {'role':'user','text':'Your message has been sent.','start_ms':1000,'end_ms':1500}],finalized=True)
+        app.state.calls.error(call['id'],'context_injection_incomplete',details={'client_event_id':'saved-test','session_ending':True})
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app),base_url=BASE) as http:
+            path='/dashboard/calls/'+call['id']
+            assert (await http.get(path)).status_code==303
+            challenge=app.state.sessions.start();http.cookies.set('alli_owner_challenge',challenge.token)
+            assert (await http.post('/dashboard/sign-in',data={'code':challenge.code},headers={'Origin':BASE})).status_code==303
+            before=repo.ready_tasks()
+            result=await http.get(path)
+            assert result.status_code==200 and 'Incoming audio' in result.text
+            assert '&lt;script&gt;untrusted&lt;/script&gt;' in result.text and '<script>untrusted' not in result.text
+            assert 'context_injection_incomplete' in result.text and 'saved-test' in result.text
+            assert 'voicemail system' in result.text and 'human confirmation' in result.text
+            assert (await http.get('/dashboard/calls/'+str(call['conversation_id']))).status_code==200
+            assert (await http.get('/dashboard/calls/not-a-call')).status_code==404
+            assert repo.ready_tasks()==before and app.state.calls.get(call['id'])['state']=='finished'
+            assert sdk.messages.create.call_count==0

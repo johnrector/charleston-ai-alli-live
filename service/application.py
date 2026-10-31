@@ -148,7 +148,7 @@ def create_application(settings,repository,carrier,google,api,*,shopify_setup=''
     app.state.calls,app.state.outbox,app.state.sessions,app.state.oauth=calls,outbox,sessions,oauth
     app.state.events=events
     app.add_middleware(ToolSurface,tools=tools,owner=owner_tools)
-    app.include_router(dashboard_router(settings,repository,sessions,carrier,outbox,scheduler=scheduler))
+    app.include_router(dashboard_router(settings,repository,sessions,carrier,outbox,scheduler=scheduler,calls=calls))
     app.include_router(account_router(settings,repository,sessions,connections,google,shopify))
 
     @app.exception_handler(PermissionDenied)

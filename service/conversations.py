@@ -97,5 +97,8 @@ class ConversationHooks:
                 'hangup. Do not repeat completed actions. Report back through the saved follow-up channel. '
                 'If the conversation was only chat or has no unfinished request, notify false.',role='developer')
 
-    async def error(self,code):
-        await asyncio.to_thread(self.calls.error,self.call_id,code)
+    async def error(self,code,details=None):
+        await asyncio.to_thread(self.calls.error,self.call_id,code,details=details)
+
+    async def context_update(self,evidence):
+        await asyncio.to_thread(self.calls.context_update,self.call_id,evidence)

@@ -147,6 +147,7 @@ def create_owner_server(repository,calls,outbox,oauth,events=None,*,scheduler=No
             'provider_status':call['carrier_status'],'provider_call_sid':call['provider_id'],
             'call_id':call['id'],'source_id':call['source_id'],'conversation_id':str(call['conversation_id']),
             'parent_task_id':call['parent_task_id'],'live_errors':await asyncio.to_thread(calls.errors,call['id']),
+            'context_updates':await asyncio.to_thread(calls.context_updates,call['id']),
             'duration_seconds':call['duration_seconds'],'transcript':call['transcript'],
             'transcript_finalized':call['finalized'],'conversation_report':task['result'] if task else '',
             'confirmed_by_carrier_status':False})
