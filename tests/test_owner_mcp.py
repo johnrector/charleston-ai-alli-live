@@ -89,6 +89,8 @@ async def test_owner_diagnostic_tool_exports_schema_and_never_dispatches_work(da
                 tool=next(t for t in tools.tools if t.name=='check_service_health')
                 assert tool.input_schema['required']==['request_id']
                 assert set(tool.input_schema['properties'])=={'request_id'}
+                assert tool.annotations.destructive_hint is False
+                assert tool.annotations.idempotent_hint is True
                 request={'request_id':'daily-health:'+datetime.now(ZoneInfo('America/New_York')).date().isoformat()}
                 first=await client.call_tool('check_service_health',request)
                 again=await client.call_tool('check_service_health',request)
